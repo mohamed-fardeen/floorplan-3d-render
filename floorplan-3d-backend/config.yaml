@@ -1,0 +1,63 @@
+parser:
+  provider: yytsi          # Real HuggingFace parser (primary)
+  # Options: yytsi | cubicasa | deepfloorplan | raster-to-vector | huggingface
+  # device: cpu             # Uncomment to force CPU (default: auto-detect CUDA)
+  # pixel_to_meter: 0.0195 # 1 pixel = X metres (default: 10m / 512px)
+
+ocr:
+  provider: mock
+  confidence_threshold: 0.8
+  dimension_snap_distance: 1.0
+
+building:
+  wall_height: 3.0
+  wall_thickness_default: 0.20
+  wall_thickness_min: 0.15
+  floor_thickness: 0.20
+  ceiling_enabled: true
+  units: METERS
+
+materials:
+  walls: painted_white
+  floor: oak_wood
+  ceiling: plaster_white
+  glass: clear_glass
+  door: wood_dark
+  exterior_walls: concrete_grey
+
+assets:
+  style: modern
+  bedroom:
+    - bed_double
+    - wardrobe
+    - side_table
+  kitchen:
+    - kitchen_counter
+    - refrigerator
+    - sink
+  bathroom:
+    - toilet
+    - sink_basin
+    - bathtub
+  living_room:
+    - sofa
+    - coffee_table
+    - tv_stand
+
+lighting:
+  enable_sun: true
+  sun_strength: 3.0
+  sun_angle_deg: 45
+  enable_hdri: false
+  hdri_path: ""
+  enable_interior_lights: false
+
+export:
+  formats:
+    - glb
+  output_dir: output
+
+benchmark:
+  dataset_dir: datasets/benchmark
+  output_dir: output
+  save_visualizations: true

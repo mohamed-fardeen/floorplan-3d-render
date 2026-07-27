@@ -1,0 +1,49 @@
+{
+  "_comment": "Ground truth for a 5-zone open-plan office (10m x 8m, 4 meeting rooms)",
+  "_units": "metres",
+  "walls": [
+    { "start": [0.0, 0.0], "end": [10.0, 0.0] },
+    { "start": [10.0, 0.0], "end": [10.0, 8.0] },
+    { "start": [10.0, 8.0], "end": [0.0, 8.0] },
+    { "start": [0.0, 8.0], "end": [0.0, 0.0] },
+    { "start": [0.0, 5.5], "end": [10.0, 5.5] },
+    { "start": [2.5, 5.5], "end": [2.5, 8.0] },
+    { "start": [5.0, 5.5], "end": [5.0, 8.0] },
+    { "start": [7.5, 5.5], "end": [7.5, 8.0] }
+  ],
+  "rooms": [
+    {
+      "polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 5.5], [0.0, 5.5]],
+      "type": "Open Office"
+    },
+    {
+      "polygon": [[0.0, 5.5], [2.5, 5.5], [2.5, 8.0], [0.0, 8.0]],
+      "type": "Meeting Room"
+    },
+    {
+      "polygon": [[2.5, 5.5], [5.0, 5.5], [5.0, 8.0], [2.5, 8.0]],
+      "type": "Meeting Room"
+    },
+    {
+      "polygon": [[5.0, 5.5], [7.5, 5.5], [7.5, 8.0], [5.0, 8.0]],
+      "type": "Meeting Room"
+    },
+    {
+      "polygon": [[7.5, 5.5], [10.0, 5.5], [10.0, 8.0], [7.5, 8.0]],
+      "type": "Meeting Room"
+    }
+  ],
+  "doors": [
+    { "center": [5.0, 0.0], "width": 1.2 },
+    { "center": [1.25, 5.5], "width": 0.9 },
+    { "center": [3.75, 5.5], "width": 0.9 },
+    { "center": [6.25, 5.5], "width": 0.9 },
+    { "center": [8.75, 5.5], "width": 0.9 }
+  ],
+  "windows": [
+    { "center": [2.5, 0.0], "width": 1.5 },
+    { "center": [7.5, 0.0], "width": 1.5 },
+    { "center": [10.0, 2.0], "width": 1.5 },
+    { "center": [10.0, 7.0], "width": 1.5 }
+  ]
+}

@@ -1,0 +1,46 @@
+import axios from 'axios';
+
+const API_BASE_URL = 'http://localhost:8000/api';
+
+export const apiClient = axios.create({
+  baseURL: API_BASE_URL,
+});
+
+export const uploadAndParse = async (file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await apiClient.post('/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+};
+
+export const validateGraph = async (sceneGraph: any) => {
+  const response = await apiClient.post('/validate', { scene_graph: sceneGraph });
+  return response.data;
+};
+
+export const exportBlender = async (
+  sceneGraph: any, 
+  includeBase: boolean = true, 
+  includeRoof: boolean = false
+): Promise<any> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        scene_graph: sceneGraph,
+        include_base: includeBase,
+        include_roof: includeRoof
+      }),
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('API Error (exportBlender):', error);
+    return { status: 'error', detail: String(error) };
+  }
+};
