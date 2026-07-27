@@ -1,168 +1,173 @@
 from typing import Dict, Any
 import yaml
 import os
-from schema import PipelineState, BlenderResult, ParserConfidenceSchema
-from validation import validate_and_repair_scene
-from parsers.factory import get_parser
-from parsers.failure_analysis import analyze_failures
+
+from schema import (
+    PipelineState, BlenderResult, ParserConfidenceSchema,
+    SceneGraph, Metadata
+)
+from perception import run_perception
+from vectorizer import run_vectorization
+from topology import run_topology
+from validation import validate_and_repair_topology
 from ocr.factory import get_ocr_engine
 from enrichment import enrich_scene_graph
 
-def parse_floorplan_node(state: PipelineState) -> Dict[str, Any]:
-    print(f"--> Parsing floor plan: {state.image_path}")
+def perception_node(state: PipelineState) -> Dict[str, Any]:
+    """Node 1: AI Perception (Pixel Space Only)"""
+    print(f"--> [1/6] Perception Node: Running AI inference on {state.image_path}")
+    perception_res = run_perception(state.image_path)
     
-    # Load Config
-    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-        
-    parser_cfg = config.get("parser", {})
-    provider   = parser_cfg.get("provider", "yytsi")
-    print(f"    Using parser provider: {provider}")
-    
-    # Build optional kwargs from config (device, pixel_to_meter)
-    parser_kwargs = {}
-    if "device" in parser_cfg:
-        parser_kwargs["device"] = parser_cfg["device"]
-    if "pixel_to_meter" in parser_cfg:
-        parser_kwargs["pixel_to_meter"] = float(parser_cfg["pixel_to_meter"])
-    
-    # Fetch and run the parser
-    parser = get_parser(provider, **parser_kwargs)
-    scene_graph = parser.parse(state.image_path)
-    
-    # --- Failure Analysis ---
-    fa_report = analyze_failures(scene_graph)
-    fa_lines  = [str(i) for i in fa_report.issues]
-    if fa_report.has_critical_failures:
-        print(f"    [WARN] Parser failure analysis detected {len(fa_report.errors)} error(s).")
-    for line in fa_lines:
-        print(f"    {line}")
-    
-    # --- Extract structured confidence ---
-    # YytsiParser stores per-class confidence in _last_confidence dict after inference.
-    from parsers.normalizer import normalize_confidence
-    conf_raw = scene_graph.metadata.confidence_score
-    # Some parser impls expose last_confidence dict after inference
-    impl = getattr(parser, "_impl", parser)
-    per_class_conf = getattr(impl, "_last_confidence", None)
-    if per_class_conf and isinstance(per_class_conf, dict):
-        normalized_conf = normalize_confidence(per_class_conf)
-    else:
-        normalized_conf = normalize_confidence(float(conf_raw))
-    parser_confidence = ParserConfidenceSchema(
-        walls   = normalized_conf.walls,
-        doors   = normalized_conf.doors,
-        windows = normalized_conf.windows,
-        rooms   = normalized_conf.rooms,
-        overall = normalized_conf.overall,
+    scores = perception_res.confidence_scores
+    conf_schema = ParserConfidenceSchema(
+        walls=scores.get("walls"),
+        doors=scores.get("doors"),
+        windows=scores.get("windows"),
+        rooms=scores.get("rooms"),
+        overall=scores.get("overall"),
     )
-    print(f"    Parser confidence: {normalized_conf}")
-
-    # --- Optional debug visualization ---
-    try:
-        export_cfg = config.get("export", {})
-        output_dir = os.path.abspath(export_cfg.get("output_dir", "output"))
-        from parsers.visualization import visualize_scene_graph
-        visualize_scene_graph(
-            scene_graph, state.image_path,
-            output_dir=os.path.join(output_dir, "debug_viz"),
-            show_labels=True,
-            show_confidence=True,
-        )
-    except Exception as viz_err:
-        print(f"    [INFO] Visualization skipped: {viz_err}")
     
     return {
-        "scene_graph":       scene_graph,
-        "status":            "parsed",
-        "parser_confidence": parser_confidence,
-        "failure_report":    fa_lines,
+        "perception_result": perception_res,
+        "parser_confidence": conf_schema,
+        "status": "perceived"
     }
 
-def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
-    print("--> OCR & Semantic Enrichment...")
-
-    if not state.scene_graph:
-        return {"status": "ocr_skipped",
-                "audit_log": ["[WARN] No scene graph available for OCR enrichment."]}
-
-    # Load config
+def vectorizer_node(state: PipelineState) -> Dict[str, Any]:
+    """Node 2: Deterministic Vectorizer"""
+    print("--> [2/6] Vectorizer Node: Converting masks to vector primitives...")
+    if not state.perception_result:
+        return {"status": "vectorization_failed", "audit_log": ["[ERROR] Missing perception result."]}
+        
     config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    pixel_to_meter = 0.0195
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+            pixel_to_meter = float(cfg.get("parser", {}).get("pixel_to_meter", 0.0195))
 
-    ocr_cfg = config.get("ocr", {})
-    provider = ocr_cfg.get("provider", "mock")
-    snap_distance = float(ocr_cfg.get("dimension_snap_distance", 1.0))
-    print(f"    Using OCR provider: {provider}")
+    vector_geom = run_vectorization(state.perception_result, pixel_to_meter=pixel_to_meter)
+    return {
+        "vector_geometry": vector_geom,
+        "status": "vectorized"
+    }
 
-    # Pixel → metre scale comes from the scene graph the parser produced.
-    pixel_to_meter = state.scene_graph.metadata.scale_pixel_to_meter
+def topology_node(state: PipelineState) -> Dict[str, Any]:
+    """Node 3: Deterministic Topology Builder"""
+    print("--> [3/6] Topology Node: Constructing room graph and connecting walls...")
+    if not state.vector_geometry:
+        return {"status": "topology_failed", "audit_log": ["[ERROR] Missing vector geometry."]}
 
-    ocr_kwargs: Dict[str, Any] = {"pixel_to_meter": pixel_to_meter}
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    pixel_to_meter = 0.0195
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+            pixel_to_meter = float(cfg.get("parser", {}).get("pixel_to_meter", 0.0195))
 
-    # Extract text
-    ocr_engine = get_ocr_engine(provider, **ocr_kwargs)
-    try:
-        detections = ocr_engine.extract_text(state.image_path)
-    except NotImplementedError:
-        print(f"    [WARN] OCR provider '{provider}' not implemented. Skipping enrichment.")
-        return {"status": "ocr_skipped", "audit_log": [f"[WARN] OCR provider '{provider}' not implemented."]}
-    except Exception as e:
-        print(f"    [ERROR] OCR failed: {e}. Continuing without enrichment.")
-        return {"status": "ocr_error", "audit_log": [f"[ERROR] OCR error: {e}"]}
-
-    print(f"    Extracted {len(detections)} text regions.")
-
-    # Spatial enrichment (passes snap distance from OCR config)
-    enriched_sg, audit_log = enrich_scene_graph(
-        state.scene_graph,
-        detections,
-        dimension_snap_distance=snap_distance,
-    )
-    for msg in audit_log:
-        print("    " + msg)
-
-    return {"scene_graph": enriched_sg, "audit_log": audit_log, "status": "ocr_completed"}
-
-
-def reannotate_scene_graph_node(state: PipelineState) -> Dict[str, Any]:
-    """
-    Re-runs the OCR node on an already-parsed scene graph.
-
-    Used by the /api/annotate endpoint so a user-edited scene graph can be
-    re-enriched (or have its previous OCR overlay refreshed) without
-    re-running the parser or geometry validation.
-
-    The endpoint must populate ``state.image_path`` and ``state.scene_graph``
-    before invoking this node.
-    """
-    return ocr_extraction_node(state)
+    topo_data = run_topology(state.vector_geometry, pixel_to_meter=pixel_to_meter)
+    return {
+        "topology_data": topo_data,
+        "status": "topology_built"
+    }
 
 def geometry_validation_node(state: PipelineState) -> Dict[str, Any]:
-    print("--> Validating geometry (Shapely/NetworkX)...")
-    if not state.scene_graph:
-        return {"status": "validation_failed", "validation_report": ["[ERROR] No scene graph to validate."]}
+    """Node 4: Geometry Validation & Repair (Shapely/NetworkX)"""
+    print("--> [4/6] Geometry Validation: Checking topology consistency...")
+    if not state.topology_data:
+        return {"status": "validation_failed", "validation_report": ["[ERROR] No topology data to validate."]}
         
-    corrected_sg, report = validate_and_repair_scene(state.scene_graph)
+    corrected_topo, report = validate_and_repair_topology(state.topology_data)
     for msg in report:
         print("    " + msg)
         
     status = "validated" if not any("[ERROR]" in msg for msg in report) else "validation_failed"
-    return {"scene_graph": corrected_sg, "validation_report": report, "status": status}
+    return {
+        "topology_data": corrected_topo,
+        "validation_report": report,
+        "status": status
+    }
+
+def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
+    """Node 5: OCR Node (Attach Labels to Topology Rooms)"""
+    print("--> [5/6] OCR Node: Attaching room labels & text regions...")
+
+    if not state.topology_data:
+        return {"status": "ocr_skipped", "audit_log": ["[WARN] No topology data available for OCR."]}
+
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f) or {}
+
+    ocr_cfg = config.get("ocr", {})
+    provider = ocr_cfg.get("provider", "mock")
+    snap_distance = float(ocr_cfg.get("dimension_snap_distance", 1.0))
+
+    # Temporarily assemble intermediate scene graph for OCR enrichment helper
+    temp_sg = SceneGraph(
+        walls=state.topology_data.connected_walls,
+        doors=state.topology_data.assigned_doors,
+        windows=state.topology_data.assigned_windows,
+        rooms=state.topology_data.rooms,
+        adjacency_graph=state.topology_data.adjacency_graph,
+    )
+
+    ocr_engine = get_ocr_engine(provider, pixel_to_meter=0.0195)
+    try:
+        detections = ocr_engine.extract_text(state.image_path)
+    except Exception as e:
+        print(f"    [ERROR] OCR failed: {e}. Continuing without enrichment.")
+        return {"status": "ocr_error", "audit_log": [f"[ERROR] OCR error: {e}"]}
+
+    enriched_sg, audit_log = enrich_scene_graph(
+        temp_sg,
+        detections,
+        dimension_snap_distance=snap_distance,
+    )
+
+    # Put enriched elements back into topology_data
+    state.topology_data.rooms = enriched_sg.rooms
+    state.topology_data.connected_walls = enriched_sg.walls
+
+    return {
+        "topology_data": state.topology_data,
+        "audit_log": audit_log,
+        "status": "ocr_completed"
+    }
 
 def scene_graph_builder_node(state: PipelineState) -> Dict[str, Any]:
-    """Final node that marks the scene graph as canonical and ready for Blender."""
-    print("--> Finalising canonical Scene Graph...")
-    sg = state.scene_graph
-    if sg:
-        print(f"    Rooms   : {len(sg.rooms)}")
-        print(f"    Walls   : {len(sg.walls)}")
-        print(f"    Doors   : {len(sg.doors)}")
-        print(f"    Windows : {len(sg.windows)}")
-        print(f"    OCR tags: {len(sg.ocr_detections)}")
-    return {"status": "scene_graph_ready"}
+    """Node 6: Final Scene Graph Builder"""
+    print("--> [6/6] Scene Graph Builder: Finalizing canonical SceneGraph...")
+    if not state.topology_data:
+        return {"status": "builder_failed", "audit_log": ["[ERROR] Missing topology data for SceneGraph creation."]}
+
+    topo = state.topology_data
+    overall_conf = state.parser_confidence.overall if state.parser_confidence else 0.85
+
+    meta = Metadata(
+        units="meters",
+        scale_pixel_to_meter=0.0195,
+        confidence_score=overall_conf
+    )
+
+    sg = SceneGraph(
+        metadata=meta,
+        walls=topo.connected_walls,
+        doors=topo.assigned_doors,
+        windows=topo.assigned_windows,
+        rooms=topo.rooms,
+        adjacency_graph=topo.adjacency_graph
+    )
+
+    print(f"    Final SceneGraph built: {len(sg.rooms)} rooms, {len(sg.walls)} walls, {len(sg.doors)} doors, {len(sg.windows)} windows.")
+
+    return {
+        "scene_graph": sg,
+        "status": "scene_graph_ready"
+    }
+
+def reannotate_scene_graph_node(state: PipelineState) -> Dict[str, Any]:
+    return ocr_extraction_node(state)
 
 def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
     print("--> Blender MCP: Generating 3D model...")
@@ -174,19 +179,16 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
                                             warnings=["[ERROR] No scene graph available."])
         }
 
-    # Load config
     config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
 
-    # Apply options from state
     if hasattr(state, "blender_options") and state.blender_options:
         cfg.update(state.blender_options)
 
     output_dir  = os.path.abspath(cfg.get("export", {}).get("output_dir", "output"))
     script_path = os.path.join(output_dir, "blender_scene.py")
 
-    # Build the bpy script
     from blender.script_builder import build_script
     from blender.executor import execute_script
 
@@ -201,7 +203,6 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
                                             script_path=script_path)
         }
 
-    # Execute
     success, export_paths, warnings = execute_script(script_path)
     for w in warnings:
         print("    " + w)
@@ -216,4 +217,3 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
         "blender_result": result,
         "status": "completed" if success else "blender_no_exe",
     }
-

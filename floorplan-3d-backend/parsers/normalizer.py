@@ -147,7 +147,16 @@ class CoordinateNormalizer:
     ):
         self.pixel_to_meter = pixel_to_meter
         self.flip_y         = flip_y
-        self.rotate_deg     = rotate_deg
+    def point_to_meter(self, point: Tuple[float, float], max_y: float = 512.0) -> Tuple[float, float]:
+        """Convert a single (x, y) point from pixels to meters."""
+        scale = self.pixel_to_meter or 0.0195
+        angle_rad = math.radians(self.rotate_deg)
+        return self._pt(point[0], point[1], scale, self.flip_y, max_y, angle_rad)
+
+    def dist_to_meter(self, dist_px: float) -> float:
+        """Convert a scalar pixel distance/thickness to meters."""
+        scale = self.pixel_to_meter or 0.0195
+        return round(float(dist_px) * scale, 6)
 
     # -- helpers ----------------------------------------------------------- #
 

@@ -10,7 +10,9 @@ from pydantic import BaseModel
 
 from schema import PipelineState, SceneGraph
 from nodes import (
-    parse_floorplan_node,
+    perception_node,
+    vectorizer_node,
+    topology_node,
     geometry_validation_node,
     ocr_extraction_node,
     scene_graph_builder_node,
@@ -49,7 +51,7 @@ class AnnotateRequest(BaseModel):
 
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
-    """Uploads an image, parses it, and returns the canonical Scene Graph."""
+    """Uploads an image, parses it via modular perception pipeline, and returns canonical Scene Graph."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
         
@@ -63,28 +65,34 @@ async def upload_image(file: UploadFile = File(...)):
     # Initialize state
     state = PipelineState(image_path=file_path)
     
-    # Run parsing steps directly
+    # Run modular pipeline steps
     try:
-        # 1. Parse
-        parse_result = parse_floorplan_node(state)
-        state.scene_graph = parse_result.get("scene_graph")
-        state.status = parse_result.get("status", state.status)
-        state.parser_confidence = parse_result.get("parser_confidence")
-        state.failure_report = parse_result.get("failure_report", [])
+        # 1. Perception
+        p_res = perception_node(state)
+        state.perception_result = p_res.get("perception_result")
+        state.parser_confidence = p_res.get("parser_confidence")
         
-        # 2. Validate
+        # 2. Vectorization
+        v_res = vectorizer_node(state)
+        state.vector_geometry = v_res.get("vector_geometry")
+        
+        # 3. Topology
+        t_res = topology_node(state)
+        state.topology_data = t_res.get("topology_data")
+        
+        # 4. Validate Topology
         val_result = geometry_validation_node(state)
-        state.scene_graph = val_result.get("scene_graph")
+        state.topology_data = val_result.get("topology_data")
         state.validation_report = val_result.get("validation_report", [])
-        state.status = val_result.get("status", state.status)
         
-        # 3. OCR (Best effort)
+        # 5. OCR
         ocr_result = ocr_extraction_node(state)
-        state.scene_graph = ocr_result.get("scene_graph", state.scene_graph)
+        state.topology_data = ocr_result.get("topology_data", state.topology_data)
         state.audit_log.extend(ocr_result.get("audit_log", []))
         
-        # 4. Finalize
-        scene_graph_builder_node(state)
+        # 6. Scene Graph Builder
+        sg_res = scene_graph_builder_node(state)
+        state.scene_graph = sg_res.get("scene_graph")
         
         return {
             "status": "success",

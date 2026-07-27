@@ -7,7 +7,9 @@ from typing import Dict, Any
 
 from schema import PipelineState
 from nodes import (
-    parse_floorplan_node,
+    perception_node,
+    vectorizer_node,
+    topology_node,
     geometry_validation_node,
     ocr_extraction_node,
     scene_graph_builder_node,
@@ -54,25 +56,30 @@ def run_evaluation(dataset_dir: str, results_dir: str):
             "visual_comparison_path": ""
         }
         
-        # 1. Parse
+        # 1. Perception & Vectorization & Topology
         profiler.start("parser")
         try:
-            update = parse_floorplan_node(state)
-            state.scene_graph = update.get("scene_graph")
-            state.status = update.get("status")
-            state.parser_confidence = update.get("parser_confidence")
-            state.failure_report = update.get("failure_report", [])
+            p_update = perception_node(state)
+            state.perception_result = p_update.get("perception_result")
+            state.parser_confidence = p_update.get("parser_confidence")
+            
+            v_update = vectorizer_node(state)
+            state.vector_geometry = v_update.get("vector_geometry")
+            
+            t_update = topology_node(state)
+            state.topology_data = t_update.get("topology_data")
+            state.status = t_update.get("status")
         except Exception as e:
             run_result["parser_error"] = str(e)
-            print(f"[ERROR] Parser failed: {e}")
+            print(f"[ERROR] Perception/Vectorizer failed: {e}")
         profiler.stop("parser")
         
         # 2. Validation
-        if state.scene_graph and not run_result["parser_error"]:
+        if state.topology_data and not run_result["parser_error"]:
             profiler.start("validation")
             try:
                 update = geometry_validation_node(state)
-                state.scene_graph = update.get("scene_graph")
+                state.topology_data = update.get("topology_data")
                 state.status = update.get("status")
                 state.validation_report = update.get("validation_report", [])
                 
@@ -89,8 +96,8 @@ def run_evaluation(dataset_dir: str, results_dir: str):
             profiler.start("ocr")
             try:
                 update = ocr_extraction_node(state)
-                if update.get("scene_graph"):
-                    state.scene_graph = update.get("scene_graph")
+                if update.get("topology_data"):
+                    state.topology_data = update.get("topology_data")
                 state.status = update.get("status", state.status)
                 state.audit_log = update.get("audit_log", [])
             except Exception as e:
@@ -102,6 +109,7 @@ def run_evaluation(dataset_dir: str, results_dir: str):
             profiler.start("scene_graph")
             try:
                 update = scene_graph_builder_node(state)
+                state.scene_graph = update.get("scene_graph")
                 state.status = update.get("status")
                 
                 # Save JSON

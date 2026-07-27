@@ -5,7 +5,9 @@ import time
 import hashlib
 from schema import PipelineState
 from nodes import (
-    parse_floorplan_node,
+    perception_node,
+    vectorizer_node,
+    topology_node,
     geometry_validation_node,
     ocr_extraction_node,
     scene_graph_builder_node,
@@ -36,24 +38,31 @@ def test_pipeline_regression(image_path):
     
     t0 = time.perf_counter()
     
-    # 1. Parse
-    update = parse_floorplan_node(state)
-    state.scene_graph = update["scene_graph"]
-    state.status = update["status"]
+    # 1. Perception
+    update = perception_node(state)
+    state.perception_result = update["perception_result"]
     
-    # 2. Geometry Validation
+    # 2. Vectorize
+    update = vectorizer_node(state)
+    state.vector_geometry = update["vector_geometry"]
+    
+    # 3. Topology
+    update = topology_node(state)
+    state.topology_data = update["topology_data"]
+    
+    # 4. Geometry Validation
     update = geometry_validation_node(state)
-    state.scene_graph = update["scene_graph"]
-    state.status = update["status"]
+    state.topology_data = update["topology_data"]
     val_errors = sum(1 for m in update.get("validation_report", []) if "[ERROR]" in m)
     
-    # 3. OCR (Skip or include depending on stable OCR availability)
+    # 5. OCR
     update = ocr_extraction_node(state)
-    if "scene_graph" in update:
-        state.scene_graph = update["scene_graph"]
+    if "topology_data" in update:
+        state.topology_data = update["topology_data"]
         
-    # 4. Final SG
+    # 6. Final SG
     update = scene_graph_builder_node(state)
+    state.scene_graph = update["scene_graph"]
     sg_json = state.scene_graph.model_dump_json(indent=2)
     sg_hash = hash_string(sg_json)
     

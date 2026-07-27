@@ -78,8 +78,50 @@ class BlenderResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     script_path: Optional[str] = None
 
+class PerceptionResult(BaseModel):
+    """Raw AI inference output (masks, heatmaps, confidence). Pixel-space, no topology."""
+    wall_masks: Optional[Any] = None
+    room_masks: Optional[Any] = None
+    door_masks: Optional[Any] = None
+    window_masks: Optional[Any] = None
+    furniture_masks: Optional[Any] = None
+    junction_heatmaps: Optional[Any] = None
+    confidence_scores: Dict[str, float] = Field(default_factory=dict)
+    raw_predictions: Dict[str, Any] = Field(default_factory=dict)
+
+class VectorSegment(BaseModel):
+    id: str
+    start: Tuple[float, float]
+    end: Tuple[float, float]
+    thickness: float = 0.15
+
+class VectorPolygon(BaseModel):
+    id: str
+    points: List[Tuple[float, float]]
+    label: str = "room"
+
+class VectorGeometry(BaseModel):
+    """Vectorized primitives extracted deterministically from perception outputs."""
+    wall_centerlines: List[VectorSegment] = Field(default_factory=list)
+    endpoints: List[Tuple[float, float]] = Field(default_factory=list)
+    junctions: List[Tuple[float, float]] = Field(default_factory=list)
+    raw_room_polygons: List[VectorPolygon] = Field(default_factory=list)
+    door_boxes: List[Tuple[float, float, float, float]] = Field(default_factory=list)
+    window_boxes: List[Tuple[float, float, float, float]] = Field(default_factory=list)
+
+class TopologyData(BaseModel):
+    """Intermediate topology representation (connected walls, assigned doors/windows, room adjacency)."""
+    connected_walls: List[Wall] = Field(default_factory=list)
+    assigned_doors: List[Door] = Field(default_factory=list)
+    assigned_windows: List[Window] = Field(default_factory=list)
+    rooms: List[Room] = Field(default_factory=list)
+    adjacency_graph: List[Adjacency] = Field(default_factory=list)
+
 class PipelineState(BaseModel):
     image_path: str
+    perception_result: Optional[PerceptionResult] = None
+    vector_geometry: Optional[VectorGeometry] = None
+    topology_data: Optional[TopologyData] = None
     scene_graph: Optional[SceneGraph] = None
     status: str = "started"
     error_message: Optional[str] = None
@@ -90,4 +132,5 @@ class PipelineState(BaseModel):
     parser_confidence: Optional[ParserConfidenceSchema] = None
     failure_report: List[str] = Field(default_factory=list)
     blender_options: Dict[str, Any] = Field(default_factory=dict)
+
 
