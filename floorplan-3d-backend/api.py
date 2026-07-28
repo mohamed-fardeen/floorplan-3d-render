@@ -1,6 +1,6 @@
 import os
 from typing import Dict, Any, List
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import shutil
@@ -50,8 +50,17 @@ class AnnotateRequest(BaseModel):
     scene_graph: SceneGraph
 
 @app.post("/api/upload")
-async def upload_image(file: UploadFile = File(...)):
-    """Uploads an image, parses it via modular perception pipeline, and returns canonical Scene Graph."""
+async def upload_image(
+    file: UploadFile = File(...),
+    model: str = Form("multi"),
+):
+    """Uploads an image, parses it via the selected perception model, and returns canonical Scene Graph."""
+    supported_models = {
+        "multi", "yytsi", "cubicasa", "mask2former", "architect-yolo",
+        "deepfloorplan", "raster-to-vector", "huggingface",
+    }
+    if model not in supported_models:
+        raise HTTPException(status_code=400, detail=f"Unsupported model: {model}")
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
         
@@ -63,7 +72,7 @@ async def upload_image(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
         
     # Initialize state
-    state = PipelineState(image_path=file_path)
+    state = PipelineState(image_path=file_path, perception_model=model)
     
     # Run modular pipeline steps
     try:

@@ -24,6 +24,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
   const [glbUrl, setGlbUrl] = useState<string | undefined>();
   const [blendUrl, setBlendUrl] = useState<string | undefined>();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState('multi');
   
   const [includeBase, setIncludeBase] = useState(true);
   const [includeRoof, setIncludeRoof] = useState(false);
@@ -40,7 +41,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
 
     try {
       // 1. Upload & Parse
-      const uploadResult = await uploadAndParse(file);
+      const uploadResult = await uploadAndParse(file, selectedModel);
       if (uploadResult.status !== 'success') {
         throw new Error(uploadResult.detail || 'Failed to upload and parse image.');
       }
@@ -113,7 +114,25 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
         </p>
       </div>
 
-      <div className="max-w-4xl mx-auto mb-6 flex justify-center gap-6 text-gray-700">
+      <div className="max-w-4xl mx-auto mb-6 flex flex-wrap items-end justify-center gap-6 text-gray-700">
+        <label className="flex flex-col items-start gap-2">
+          <span className="font-medium">Perception model</span>
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={stage !== 'idle' && stage !== 'complete' && stage !== 'error'}
+            className="min-w-64 rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+          >
+            <option value="multi">CubiCasa + Architect YOLO</option>
+            <option value="yytsi">Yytsi</option>
+            <option value="cubicasa">CubiCasa</option>
+            <option value="mask2former">Mask2Former</option>
+            <option value="architect-yolo">Architect YOLO</option>
+            <option value="deepfloorplan">DeepFloorplan</option>
+            <option value="raster-to-vector">Raster to Vector</option>
+            <option value="huggingface">Hugging Face</option>
+          </select>
+        </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input 
             type="checkbox" 

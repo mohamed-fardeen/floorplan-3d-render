@@ -15,7 +15,7 @@ def get_ocr_engine(provider_name: str, **kwargs) -> BaseOCREngine:
         return MockSuryaAdapter()
     elif provider_name == "surya":
         return SuryaOCRAdapter(**kwargs)
-    elif provider_name == "paddle":
+    elif provider_name in {"paddle", "paddleocr", "ppocr", "pp-ocrv6"}:
         return PaddleOCRAdapter(**kwargs)
     else:
         raise ValueError(f"Unknown OCR provider: {provider_name}")

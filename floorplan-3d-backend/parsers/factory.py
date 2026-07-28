@@ -9,6 +9,9 @@ Supported providers
 -------------------
   yytsi            — Yytsi/floorplan-to-3d-walls (HuggingFace, primary)
   cubicasa         — CubiCasa5K model (HuggingFace, same backbone as yytsi)
+  mask2former      — Mask2Former swin-large semantic segmentation (facebook/)
+  architect-yolo   — SamirShabani/Architect YOLOv8m (28 floor-plan classes)
+  yolo             — alias for architect-yolo
   deepfloorplan    — DeepFloorplan (stub, not yet integrated)
   raster-to-vector — R2V approach (stub, not yet integrated)
   r2v              — alias for raster-to-vector
@@ -22,6 +25,9 @@ from .base import BaseFloorPlanParser
 from .adapters import (
     CubiCasaParser,
     YytsiParser,
+    Mask2FormerParserAdapter,
+    CubiCasaSegmentationParserAdapter,
+    ArchitectYOLOParserAdapter,
     DeepFloorplanParser,
     RasterToVectorParser,
     HuggingFaceParser,
@@ -31,6 +37,12 @@ from .adapters import (
 _REGISTRY: dict[str, type] = {
     "yytsi":            YytsiParser,
     "cubicasa":         CubiCasaParser,
+    # New multi-model providers
+    "mask2former":      Mask2FormerParserAdapter,
+    "cubicasa-seg":     CubiCasaSegmentationParserAdapter,
+    "architect-yolo":   ArchitectYOLOParserAdapter,
+    "yolo":             ArchitectYOLOParserAdapter,
+    # Stubs
     "deepfloorplan":    DeepFloorplanParser,
     "raster-to-vector": RasterToVectorParser,
     "r2v":              RasterToVectorParser,

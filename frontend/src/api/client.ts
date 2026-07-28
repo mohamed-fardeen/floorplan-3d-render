@@ -6,9 +6,10 @@ export const apiClient = axios.create({
   baseURL: API_BASE_URL,
 });
 
-export const uploadAndParse = async (file: File) => {
+export const uploadAndParse = async (file: File, model: string = 'multi') => {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('model', model);
   
   const response = await apiClient.post('/upload', formData, {
     headers: {

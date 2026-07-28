@@ -119,6 +119,7 @@ class TopologyData(BaseModel):
 
 class PipelineState(BaseModel):
     image_path: str
+    perception_model: Optional[str] = None
     perception_result: Optional[PerceptionResult] = None
     vector_geometry: Optional[VectorGeometry] = None
     topology_data: Optional[TopologyData] = None

@@ -207,15 +207,120 @@ class SuryaOCRAdapter(BaseOCREngine):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PaddleOCR placeholder
+# PaddleOCR — real PP-OCRv6 implementation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PaddleOCRAdapter(BaseOCREngine):
-    """Placeholder — raise if invoked."""
+    """
+    Real OCR adapter backed by PaddleOCR PP-OCRv6.
+
+    Parameters
+    ----------
+    pixel_to_meter : float
+        Scale factor (1 image pixel == `pixel_to_meter` metres).
+        PaddleOCR returns pixel-space coordinates; we convert them here.
+    lang : str
+        Language code passed to PaddleOCR (default: ``"en"``).
+    confidence_threshold : float
+        Minimum recognition confidence to include a detection.
+    use_gpu : bool | None
+        ``True``  → force GPU, ``False`` → force CPU, ``None`` → auto-detect.
+    """
+
+    def __init__(
+        self,
+        pixel_to_meter:       float = 0.0195,
+        lang:                 str   = "en",
+        confidence_threshold: float = 0.6,
+        use_gpu:              Optional[bool] = None,
+    ):
+        self.pixel_to_meter       = pixel_to_meter
+        self.lang                 = lang
+        self.confidence_threshold = confidence_threshold
+        self.use_gpu              = use_gpu
+        self._ocr                 = None   # lazy-loaded
+
+    # ── Lazy model loader ───────────────────────────────────────────────
+
+    def _ensure_loaded(self):
+        if self._ocr is not None:
+            return
+
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as exc:
+            raise ImportError(
+                "paddleocr is not installed. "
+                "Run `pip install paddleocr` to use the 'paddleocr' provider."
+            ) from exc
+
+        import torch
+        gpu = self.use_gpu if self.use_gpu is not None else torch.cuda.is_available()
+
+        logger.info("PaddleOCR: initialising PP-OCRv6 (lang=%s, gpu=%s)", self.lang, gpu)
+        self._ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang=self.lang,
+            use_gpu=gpu,
+            show_log=False,
+        )
+
+    # ── Inference ───────────────────────────────────────────────────────
 
     def extract_text(self, image_path: str) -> List[OCRDetection]:
-        raise NotImplementedError(
-            "Paddle OCR integration not yet implemented. "
-            "Install paddleocr and fill in PaddleOCRAdapter.extract_text, "
-            "or set ocr.provider to 'mock' / 'surya' in config.yaml."
-        )
+        """
+        Run PP-OCRv6 on *image_path* and return a list of OCRDetection objects.
+
+        PaddleOCR returns results in the form:
+          [ [ [polygon_pts], (text, confidence) ], ... ]
+        where polygon_pts is a list of four [x, y] corner points.
+        """
+        self._ensure_loaded()
+
+        logger.info("PaddleOCR: running on %s", image_path)
+        raw = self._ocr.ocr(image_path, cls=True)
+
+        detections: List[OCRDetection] = []
+        scale = self.pixel_to_meter
+
+        # paddleocr ≥ 2.x wraps results in an extra list; flatten one level
+        if raw and isinstance(raw[0], list) and raw[0] and isinstance(raw[0][0], list):
+            lines = raw[0]
+        else:
+            lines = raw or []
+
+        for idx, item in enumerate(lines):
+            if not item or len(item) < 2:
+                continue
+
+            polygon_raw, text_info = item[0], item[1]
+            text       = str(text_info[0]).strip() if text_info else ""
+            confidence = float(text_info[1])       if text_info else 0.0
+
+            if not text or confidence < self.confidence_threshold:
+                continue
+
+            # polygon_raw: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] (pixel coords)
+            poly_px = [(float(p[0]), float(p[1])) for p in polygon_raw]
+
+            # Convert to metres
+            poly_m = [(x * scale, y * scale) for x, y in poly_px]
+
+            xs = [p[0] for p in poly_m]
+            ys = [p[1] for p in poly_m]
+            bbox = (min(xs), min(ys), max(xs), max(ys))
+
+            detections.append(
+                OCRDetection(
+                    id=f"ocr_paddle_{idx}",
+                    text=text,
+                    confidence=round(confidence, 4),
+                    bounding_box=bbox,
+                    polygon=poly_m,
+                    language=self.lang,
+                )
+            )
+
+        logger.info("PaddleOCR: extracted %d text regions (threshold=%.2f)",
+                    len(detections), self.confidence_threshold)
+        return detections

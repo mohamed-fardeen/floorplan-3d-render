@@ -66,46 +66,14 @@ def run_vectorization(perception_res: PerceptionResult, pixel_to_meter: float = 
 
     # --- 1. Extract Wall Centerlines & Endpoints ---
     if wall_mask is not None and np.any(wall_mask):
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         kernel_open  = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         clean_wall   = cv2.morphologyEx(wall_mask, cv2.MORPH_OPEN,  kernel_open)
         clean_wall   = cv2.morphologyEx(clean_wall, cv2.MORPH_CLOSE, kernel_close)
 
-        contours, _ = cv2.findContours(clean_wall, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < _MIN_WALL_AREA:
-                continue
-
-            rect = cv2.minAreaRect(cnt)
-            (cx, cy), (rw, rh), angle = rect
-
-            if rw >= rh:
-                half_len = rw / 2.0
-                thickness_px = rh
-                theta = math.radians(angle)
-            else:
-                half_len = rh / 2.0
-                thickness_px = rw
-                theta = math.radians(angle + 90.0)
-
-            dx = math.cos(theta) * half_len
-            dy = math.sin(theta) * half_len
-
-            # Invert Y to match coordinate system if needed
-            start = (float(cx - dx), float(cy - dy))
-            end   = (float(cx + dx), float(cy + dy))
-
-            wall_id = f"wall_{uuid.uuid4().hex[:8]}"
-            seg = VectorSegment(
-                id=wall_id,
-                start=start,
-                end=end,
-                thickness=max(float(thickness_px), 10.0)
-            )
-            wall_segments.append(seg)
-            endpoints.extend([start, end])
+        wall_segments.extend(_wall_segments_from_mask(clean_wall))
+        for seg in wall_segments:
+            endpoints.extend([seg.start, seg.end])
 
     # --- 2. Extract Room Polygons ---
     if room_mask is not None and np.any(room_mask):
@@ -145,3 +113,102 @@ def run_vectorization(perception_res: PerceptionResult, pixel_to_meter: float = 
         door_boxes=door_boxes,
         window_boxes=window_boxes,
     )
+
+
+def _wall_segments_from_mask(clean_wall: np.ndarray) -> List[VectorSegment]:
+    """
+    Convert a filled wall-region mask into centerline segments.
+
+    CubiCasa often predicts connected wall regions. A single minAreaRect over a
+    connected component collapses the whole floor plan into one huge wall, so we
+    skeletonize first and then extract line primitives from the skeleton.
+    """
+    import cv2
+
+    skeleton = _skeletonize(clean_wall)
+    lines = cv2.HoughLinesP(
+        (skeleton * 255).astype(np.uint8),
+        rho=1,
+        theta=np.pi / 180,
+        threshold=18,
+        minLineLength=18,
+        maxLineGap=8,
+    )
+
+    segments: List[VectorSegment] = []
+    if lines is not None:
+        seen = set()
+        for line in lines.reshape(-1, 4):
+            x1, y1, x2, y2 = [float(v) for v in line]
+            length = math.hypot(x2 - x1, y2 - y1)
+            if length < 18:
+                continue
+
+            # Stable coarse de-duplication for near-identical Hough lines.
+            key = tuple(round(v / 4) for v in (x1, y1, x2, y2))
+            rev_key = tuple(round(v / 4) for v in (x2, y2, x1, y1))
+            if key in seen or rev_key in seen:
+                continue
+            seen.add(key)
+
+            segments.append(VectorSegment(
+                id=f"wall_{uuid.uuid4().hex[:8]}",
+                start=(x1, y1),
+                end=(x2, y2),
+                thickness=10.0,
+            ))
+
+    if segments:
+        return segments
+
+    return _wall_segments_from_contours(clean_wall)
+
+
+def _skeletonize(mask: np.ndarray) -> np.ndarray:
+    import cv2
+
+    img = (mask > 0).astype(np.uint8)
+    skel = np.zeros_like(img)
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+
+    while np.any(img):
+        eroded = cv2.erode(img, kernel)
+        opened = cv2.dilate(eroded, kernel)
+        temp = cv2.subtract(img, opened)
+        skel = cv2.bitwise_or(skel, temp)
+        img = eroded
+
+    return skel
+
+
+def _wall_segments_from_contours(clean_wall: np.ndarray) -> List[VectorSegment]:
+    import cv2
+
+    contours, _ = cv2.findContours(clean_wall, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    segments: List[VectorSegment] = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < _MIN_WALL_AREA:
+            continue
+
+        rect = cv2.minAreaRect(cnt)
+        (cx, cy), (rw, rh), angle = rect
+
+        if rw >= rh:
+            half_len = rw / 2.0
+            theta = math.radians(angle)
+        else:
+            half_len = rh / 2.0
+            theta = math.radians(angle + 90.0)
+
+        dx = math.cos(theta) * half_len
+        dy = math.sin(theta) * half_len
+
+        segments.append(VectorSegment(
+            id=f"wall_{uuid.uuid4().hex[:8]}",
+            start=(float(cx - dx), float(cy - dy)),
+            end=(float(cx + dx), float(cy + dy)),
+            thickness=10.0,
+        ))
+
+    return segments

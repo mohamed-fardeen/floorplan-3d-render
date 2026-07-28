@@ -1,3 +1,15 @@
+# ── Multi-model perception pipeline ────────────────────────────────────────
+perception:
+  provider: multi                                        # 'multi' = new pipeline | 'yytsi' = legacy
+  segmentation_model: cubicasa/cubicasa5k                      # official CubiCasa5K repo adapter
+  cubicasa_repo_path: models/cubicasa5k                        # local clone of https://github.com/cubicasa/cubicasa5k
+  cubicasa_weights_path: models/cubicasa5k/model_best_val_loss_var.pkl  # official Google Drive checkpoint
+  detection_model: SamirShabani/Architect                # YOLOv8m floor-plan detector (28 classes)
+  detection_confidence: 0.25                             # YOLO confidence threshold
+  yolo_fallback_to_segmentation: true                    # use CubiCasa mask when YOLO finds nothing
+  # device: cpu                                          # Uncomment to force CPU (default: auto-detect)
+
+# ── Legacy parser (used when perception.provider = 'yytsi') ─────────────────
 parser:
   provider: yytsi          # Real HuggingFace parser (primary)
   # Options: yytsi | cubicasa | deepfloorplan | raster-to-vector | huggingface
@@ -5,8 +17,9 @@ parser:
   # pixel_to_meter: 0.0195 # 1 pixel = X metres (default: 10m / 512px)
 
 ocr:
-  provider: mock
-  confidence_threshold: 0.8
+  provider: paddleocr        # PP-OCRv6 — upgraded from mock
+  lang: en
+  confidence_threshold: 0.6
   dimension_snap_distance: 1.0
 
 building:

@@ -19,7 +19,7 @@
  */
 
 import React, {
-  useState, useRef, useCallback, useEffect, useMemo,
+  useState, useRef, useCallback, useEffect,
 } from 'react';
 import { useAnnotationStore } from '../store/annotationStore';
 import type { SceneGraph, Wall, Door, FloorWindow } from '../types/schema';
@@ -101,28 +101,9 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
     ? 1.0 / sceneGraph.metadata.scale_pixel_to_meter
     : 51.2;
 
-  const { canvasW, canvasH } = useMemo(() => {
-    if (!sceneGraph) return { canvasW: 512 + PAD * 2, canvasH: 512 + PAD * 2 };
-    const { walls, rooms, doors, windows } = sceneGraph;
-    const xs = [
-      ...walls.flatMap(w  => [w.start[0], w.end[0]]),
-      ...rooms.flatMap(r  => r.polygon.map(p => p[0])),
-      ...doors.map(d       => d.center[0]),
-      ...windows.map(w    => w.center[0]),
-    ];
-    const ys = [
-      ...walls.flatMap(w  => [w.start[1], w.end[1]]),
-      ...rooms.flatMap(r  => r.polygon.map(p => p[1])),
-      ...doors.map(d       => d.center[1]),
-      ...windows.map(w    => w.center[1]),
-    ];
-    const maxX = xs.length ? Math.max(...xs) : 10;
-    const maxY = ys.length ? Math.max(...ys) : 10;
-    return {
-      canvasW: maxX * mToPx + PAD * 2,
-      canvasH: maxY * mToPx + PAD * 2,
-    };
-  }, [sceneGraph, mToPx]);
+  const modelSize = 512;
+  const canvasW = modelSize + PAD * 2;
+  const canvasH = modelSize + PAD * 2;
 
   /** metres → SVG pixels */
   const toSvg = useCallback((xm: number, ym: number) => ({
@@ -461,12 +442,11 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
                 display: 'block',
               }}
             >
-              {/* Background image — stretched to cover the coordinate space */}
               <image
                 href={imageUrl}
-                x={0} y={0}
-                width={canvasW} height={canvasH}
-                preserveAspectRatio="xMidYMid slice"
+                x={PAD} y={PAD}
+                width={modelSize} height={modelSize}
+                preserveAspectRatio="none"
                 opacity={0.80}
               />
 

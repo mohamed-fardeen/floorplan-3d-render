@@ -16,7 +16,7 @@ from enrichment import enrich_scene_graph
 def perception_node(state: PipelineState) -> Dict[str, Any]:
     """Node 1: AI Perception (Pixel Space Only)"""
     print(f"--> [1/6] Perception Node: Running AI inference on {state.image_path}")
-    perception_res = run_perception(state.image_path)
+    perception_res = run_perception(state.image_path, model=state.perception_model)
     
     scores = perception_res.confidence_scores
     conf_schema = ParserConfidenceSchema(
@@ -101,6 +101,8 @@ def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
 
     ocr_cfg = config.get("ocr", {})
     provider = ocr_cfg.get("provider", "mock")
+    lang = ocr_cfg.get("lang", "en")
+    confidence_threshold = float(ocr_cfg.get("confidence_threshold", 0.6))
     snap_distance = float(ocr_cfg.get("dimension_snap_distance", 1.0))
 
     # Temporarily assemble intermediate scene graph for OCR enrichment helper
@@ -112,7 +114,12 @@ def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
         adjacency_graph=state.topology_data.adjacency_graph,
     )
 
-    ocr_engine = get_ocr_engine(provider, pixel_to_meter=0.0195)
+    ocr_engine = get_ocr_engine(
+        provider,
+        pixel_to_meter=0.0195,
+        lang=lang,
+        confidence_threshold=confidence_threshold,
+    )
     try:
         detections = ocr_engine.extract_text(state.image_path)
     except Exception as e:
