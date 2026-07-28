@@ -22,8 +22,7 @@ import React, {
   useState, useRef, useCallback, useEffect,
 } from 'react';
 import { useAnnotationStore } from '../store/annotationStore';
-import type { SceneGraph, Wall, Door, FloorWindow } from '../types/schema';
-import { exportBlender } from '../api/client';
+import type { SceneGraph, Wall } from '../types/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & types

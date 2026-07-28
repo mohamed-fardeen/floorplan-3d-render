@@ -6,7 +6,8 @@ from fastapi.staticfiles import StaticFiles
 import shutil
 import uuid
 import uvicorn
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from schema import PipelineState, SceneGraph
 from nodes import (
@@ -40,10 +41,26 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 class ValidateRequest(BaseModel):
     scene_graph: SceneGraph
 
+class WallMaterialOptions(BaseModel):
+    theme: Literal["warm_modern", "painted_white", "cool_modern", "sage", "sand", "navy", "clay", "blush", "charcoal", "olive", "sky", "custom"] = "warm_modern"
+    color: str = Field("#D8C8B8", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+class FloorMaterialOptions(BaseModel):
+    design: Literal["square_grid", "checker", "terracotta", "marble", "slate", "wood", "mosaic", "sandstone", "granite", "solid", "custom"] = "square_grid"
+    primary_color: str = Field("#E8E3D9", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field("#B8B5AE", pattern=r"^#[0-9A-Fa-f]{6}$")
+    grout_color: str = Field("#A8A49C", pattern=r"^#[0-9A-Fa-f]{6}$")
+    tile_size_m: float = Field(0.4, ge=0.05, le=5.0)
+
+class MaterialOptions(BaseModel):
+    walls: WallMaterialOptions = Field(default_factory=WallMaterialOptions)
+    floor: FloorMaterialOptions = Field(default_factory=FloorMaterialOptions)
+
 class ExportRequest(BaseModel):
     scene_graph: SceneGraph
     include_base: bool = True
     include_roof: bool = True
+    material_options: MaterialOptions = Field(default_factory=MaterialOptions)
 
 class AnnotateRequest(BaseModel):
     image_path: str
@@ -138,7 +155,11 @@ async def export_blender(req: ExportRequest):
     state = PipelineState(
         image_path="",
         scene_graph=req.scene_graph,
-        blender_options={"include_base": req.include_base, "include_roof": req.include_roof}
+        blender_options={
+            "include_base": req.include_base,
+            "include_roof": req.include_roof,
+            "material_options": req.material_options.model_dump(),
+        }
     )
 
     try:

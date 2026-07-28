@@ -7,8 +7,10 @@ import { ModelViewer } from '../components/ModelViewer';
 import { DownloadPanel } from '../components/DownloadPanel';
 import { AnnotatedFloorplan } from '../components/AnnotatedFloorplan';
 import { uploadAndParse, exportBlender } from '../api/client';
+import type { MaterialOptions } from '../api/client';
 import type { SceneGraph } from '../types/schema';
 import { AnnotationPage } from './AnnotationPage';
+import { DesignOptions } from '../components/DesignOptions';
 import { useAnnotationStore } from '../store/annotationStore';
 
 interface HomeProps {
@@ -28,6 +30,16 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
   
   const [includeBase, setIncludeBase] = useState(true);
   const [includeRoof, setIncludeRoof] = useState(false);
+  const [materialOptions, setMaterialOptions] = useState<MaterialOptions>({
+    walls: { theme: 'warm_modern', color: '#D8C8B8' },
+    floor: {
+      design: 'square_grid',
+      primary_color: '#E8E3D9',
+      secondary_color: '#B8B5AE',
+      grout_color: '#A8A49C',
+      tile_size_m: 0.4,
+    },
+  });
   const { setAnnotationData } = useAnnotationStore();
 
   const startPipeline = async (file: File) => {
@@ -51,9 +63,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       setParserConfidence(uploadResult.parser_confidence || 0);
       setValidationReport(uploadResult.validation_report || []);
 
-      // Go to annotation review
-      setAnnotationData(graph, objectUrl);
-      setStage('annotating');
+      setStage('designing');
 
     } catch (err: any) {
       console.error(err);
@@ -62,11 +72,17 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
     }
   };
 
+  const continueToAnnotation = () => {
+    if (!sceneGraph || !imageUrl) return;
+    setAnnotationData(sceneGraph, imageUrl);
+    setStage('annotating');
+  };
+
   const handleApprove = async (editedGraph: SceneGraph) => {
     setStage('blender');
     setSceneGraph(editedGraph);
     try {
-      const exportResult = await exportBlender(editedGraph, includeBase, includeRoof);
+      const exportResult = await exportBlender(editedGraph, includeBase, includeRoof, materialOptions);
       
       if (exportResult.status !== 'success') {
         throw new Error(exportResult.detail || 'Failed to export 3D model.');
@@ -93,6 +109,21 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       setError(err.message || String(err));
     }
   };
+
+  if (stage === 'designing') {
+    return (
+      <DesignOptions
+        includeBase={includeBase}
+        includeRoof={includeRoof}
+        materials={materialOptions}
+        onIncludeBaseChange={setIncludeBase}
+        onIncludeRoofChange={setIncludeRoof}
+        onMaterialsChange={setMaterialOptions}
+        onContinue={continueToAnnotation}
+        onBack={() => setStage('idle')}
+      />
+    );
+  }
 
   if (stage === 'annotating') {
     return (
@@ -133,24 +164,6 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
             <option value="huggingface">Hugging Face</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input 
-            type="checkbox" 
-            checked={includeBase} 
-            onChange={(e) => setIncludeBase(e.target.checked)} 
-            className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-          />
-          <span className="font-medium">Floor</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input 
-            type="checkbox" 
-            checked={includeRoof} 
-            onChange={(e) => setIncludeRoof(e.target.checked)} 
-            className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-          />
-          <span className="font-medium">Ceiling</span>
-        </label>
       </div>
 
       <UploadArea onStartPipeline={startPipeline} disabled={stage !== 'idle' && stage !== 'complete' && stage !== 'error'} />
@@ -180,7 +193,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
           </button>
           
           <button
-            onClick={() => exportBlender(sceneGraph, includeBase, includeRoof)}
+            onClick={() => exportBlender(sceneGraph, includeBase, includeRoof, materialOptions)}
             className="w-full bg-orange-500 hover:bg-orange-600 text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">

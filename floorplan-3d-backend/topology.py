@@ -43,6 +43,8 @@ def run_topology(vector_geom: VectorGeometry, pixel_to_meter: float = 0.0195) ->
             thickness=max(thick_m, 0.15)
         ))
 
+    walls = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
+
     # Assign doors to nearest walls
     doors: List[Door] = []
     for d_idx, box in enumerate(vector_geom.door_boxes):
@@ -111,6 +113,132 @@ def run_topology(vector_geom: VectorGeometry, pixel_to_meter: float = 0.0195) ->
         rooms=rooms,
         adjacency_graph=adjacency
     )
+
+def _snap_to_axis(wall: Wall, angle_tolerance_deg: float = 12.0) -> Wall:
+    """Snap wall endpoints onto the nearest orthogonal axis through its midpoint."""
+    (x1, y1), (x2, y2) = wall.start, wall.end
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return wall
+
+    angle = abs(math.degrees(math.atan2(dy, dx))) % 180
+    nearest_axis = 0.0 if angle < 90 else 90.0
+    deviation = min(abs(angle - nearest_axis), abs(angle - (nearest_axis + 180)))
+    if deviation > angle_tolerance_deg:
+        return wall
+
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    half = length / 2.0
+    if angle < 90:
+        return Wall(
+            id=wall.id,
+            start=(cx - half, cy),
+            end=(cx + half, cy),
+            thickness=wall.thickness,
+        )
+    return Wall(
+        id=wall.id,
+        start=(cx, cy - half),
+        end=(cx, cy + half),
+        thickness=wall.thickness,
+    )
+
+
+def _merge_collinear_walls(walls: List[Wall], gap_tolerance: float, angle_tolerance_deg: float) -> List[Wall]:
+    """Snap near-axis walls to 90°, then fill small gaps only where fragments are collinear and aligned end-to-end."""
+    if not walls:
+        return walls
+
+    snapped = [_snap_to_axis(w) for w in walls]
+    return _fill_collinear_gaps(snapped, gap_tolerance, math.sin(math.radians(angle_tolerance_deg)))
+
+
+def _fill_collinear_gaps(walls: List[Wall], gap_tolerance: float, sin_angle_tol: float) -> List[Wall]:
+    """Iteratively join only adjacent collinear fragments that share a touching endpoint cluster.
+
+    Each merge step requires:
+      * Both walls lie on the same orthogonal axis.
+      * Their projections overlap or are separated by no more than ``gap_tolerance`` along that axis.
+      * They share one endpoint cluster (closest endpoints ≤ gap_tolerance apart).
+    """
+    if not walls:
+        return walls
+
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(walls)):
+            if walls[i] is None:
+                continue
+            for j in range(i + 1, len(walls)):
+                if walls[j] is None:
+                    continue
+                merged = _try_join(walls[i], walls[j], gap_tolerance, sin_angle_tol)
+                if merged is None:
+                    continue
+                walls[i] = merged
+                walls[j] = None
+                changed = True
+                break
+            if changed:
+                break
+
+    return [w for w in walls if w is not None]
+
+
+def _try_join(a: Wall, b: Wall, gap_tolerance: float, sin_angle_tol: float):
+    """Return a merged wall if ``a`` and ``b`` are aligned end-to-end with a small gap, else ``None``."""
+    ax1, ay1 = a.start
+    ax2, ay2 = a.end
+    bx1, by1 = b.start
+    bx2, by2 = b.end
+
+    a_h = abs(ax2 - ax1) >= abs(ay2 - ay1)
+    b_h = abs(bx2 - bx1) >= abs(by2 - by1)
+    if a_h != b_h:
+        return None
+
+    if a_h:
+        a_y = (ay1 + ay2) / 2.0
+        b_y = (by1 + by2) / 2.0
+        if abs(a_y - b_y) > 0.25:
+            return None
+        a_lo, a_hi = (ax1, ax2) if ax1 <= ax2 else (ax2, ax1)
+        b_lo, b_hi = (bx1, bx2) if bx1 <= bx2 else (bx2, bx1)
+        gap = max(a_lo, b_lo) - min(a_hi, b_hi)
+        if gap > gap_tolerance:
+            return None
+        new_lo, new_hi = min(a_lo, b_lo), max(a_hi, b_hi)
+        if new_hi - new_lo < 0.05:
+            return None
+        start = (new_lo, a_y)
+        end = (new_hi, a_y)
+    else:
+        a_x = (ax1 + ax2) / 2.0
+        b_x = (bx1 + bx2) / 2.0
+        if abs(a_x - b_x) > 0.25:
+            return None
+        a_lo, a_hi = (ay1, ay2) if ay1 <= ay2 else (ay2, ay1)
+        b_lo, b_hi = (by1, by2) if by1 <= by2 else (by2, by1)
+        gap = max(a_lo, b_lo) - min(a_hi, b_hi)
+        if gap > gap_tolerance:
+            return None
+        new_lo, new_hi = min(a_lo, b_lo), max(a_hi, b_hi)
+        if new_hi - new_lo < 0.05:
+            return None
+        start = (a_x, new_lo)
+        end = (a_x, new_hi)
+
+    return Wall(
+        id=f"wall_joined_{uuid.uuid4().hex[:8]}",
+        start=start,
+        end=end,
+        thickness=max(a.thickness, b.thickness),
+    )
+
 
 def _find_nearest_wall_id(point: Tuple[float, float], walls: List[Wall]) -> Optional[str]:
     if not walls:

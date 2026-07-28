@@ -42,19 +42,6 @@ def build(scene_graph, cfg) -> str:
             f"bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)",
         ]
 
-        if not cfg.get("include_roof", True):
-            lines += [
-                f"import bmesh",
-                f"bpy.context.view_layer.objects.active = wall_obj_{wall.id}",
-                f"bpy.ops.object.mode_set(mode='EDIT')",
-                f"bm = bmesh.from_edit_mesh(wall_obj_{wall.id}.data)",
-                f"bm.faces.ensure_lookup_table()",
-                f"top_faces = [f for f in bm.faces if f.normal.z > 0.9]",
-                f"bmesh.ops.delete(bm, geom=top_faces, context='FACES')",
-                f"bmesh.update_edit_mesh(wall_obj_{wall.id}.data)",
-                f"bpy.ops.object.mode_set(mode='OBJECT')",
-            ]
-
         lines.append("")
 
     return "\n".join(lines)

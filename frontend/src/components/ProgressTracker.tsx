@@ -8,6 +8,7 @@ export type PipelineStage =
   | 'validating' 
   | 'ocr' 
   | 'scene_graph' 
+  | 'designing'
   | 'annotating'
   | 'blender' 
   | 'complete' 
@@ -24,33 +25,13 @@ const STAGES = [
   { id: 'validating', label: 'Geometry Validation' },
   { id: 'ocr', label: 'OCR' },
   { id: 'scene_graph', label: 'Scene Graph' },
+  { id: 'designing', label: 'Design Options' },
   { id: 'annotating', label: 'Manual Review' },
   { id: 'blender', label: 'Blender Generation' },
   { id: 'complete', label: 'Export Complete' }
 ];
 
 export const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStage, error }) => {
-  const getStageIndex = (stage: PipelineStage) => {
-    if (stage === 'idle') return -1;
-    if (stage === 'error') return STAGES.length; // Don't use index for error logic directly
-    
-    // In our synchronous backend:
-    // When "blender" is running, all previous steps are done.
-    // When "parsing" is running, it's actually doing parsing, validation, ocr, scene_graph simultaneously from the frontend's perspective.
-    
-    if (stage === 'uploading' || stage === 'parsing' || stage === 'validating' || stage === 'ocr' || stage === 'scene_graph') {
-      // Simulate progress visually if we just know it's in the first phase
-      return STAGES.findIndex(s => s.id === 'scene_graph');
-    }
-    
-    if (stage === 'annotating') return STAGES.findIndex(s => s.id === 'annotating');
-    if (stage === 'blender') return STAGES.findIndex(s => s.id === 'blender');
-    if (stage === 'complete') return STAGES.length;
-    return -1;
-  };
-
-  const currentIndex = getStageIndex(currentStage);
-
   return (
     <div className="w-full max-w-2xl mx-auto p-6 bg-white rounded-lg shadow-md mt-6">
       <h3 className="text-xl font-bold mb-6">Pipeline Progress</h3>
@@ -64,6 +45,9 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStage, 
           } else if (currentStage === 'parsing' && idx <= STAGES.findIndex(s => s.id === 'scene_graph')) {
             // First phase is running
             status = 'loading'; 
+          } else if (currentStage === 'designing') {
+            if (idx < STAGES.findIndex(s => s.id === 'designing')) status = 'done';
+            else if (idx === STAGES.findIndex(s => s.id === 'designing')) status = 'loading';
           } else if (currentStage === 'annotating') {
             if (idx < STAGES.findIndex(s => s.id === 'annotating')) status = 'done';
             else if (idx === STAGES.findIndex(s => s.id === 'annotating')) status = 'loading';

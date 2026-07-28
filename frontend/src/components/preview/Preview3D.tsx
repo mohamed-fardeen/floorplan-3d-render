@@ -1,8 +1,7 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Box } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { useEditorStore } from '../../store/editorStore';
-import * as THREE from 'three';
 
 const Wall3D: React.FC<{ start: [number, number], end: [number, number], thickness: number }> = ({ start, end, thickness }) => {
   const dx = end[0] - start[0];

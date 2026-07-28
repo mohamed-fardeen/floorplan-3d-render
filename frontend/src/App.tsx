@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Home } from './pages/Home';
 import { Sidebar } from './components/ui/Sidebar';
 import { EditorCanvas } from './components/editor/EditorCanvas';

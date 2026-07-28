@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SceneGraph, Wall, Room, Door, FloorWindow, OCRDetection } from '../types/schema';
+import type { SceneGraph, Wall, Room, Door, FloorWindow } from '../types/schema';
 
 interface EditorState {
   sceneGraph: SceneGraph | null;

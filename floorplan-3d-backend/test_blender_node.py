@@ -139,6 +139,88 @@ def test_ceiling_disabled():
     assert_valid_python(code, "Ceiling disabled")
     assert "Ceiling disabled" in code, "Disabled ceiling comment should appear"
 
+def test_roof_disabled_keeps_walls_closed():
+    cfg = {**BASE_CFG, "include_roof": False}
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Roof disabled")
+    assert "Ceiling_Bedroom" not in code
+    assert "top_faces" not in code
+    assert "bmesh.ops.delete" not in code
+
+def test_custom_wall_colour():
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {"theme": "custom", "color": "#336699"},
+            "floor": {"design": "solid"},
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Custom wall colour")
+    assert "WallMaterial" in code
+    assert "bpy.data.materials.get('WallMaterial')" in code
+    assert "mat.diffuse_color = (0.2, 0.4, 0.6, 1.0)" in code
+    assert "_bsdf.inputs['Base Color'].default_value = (0.2, 0.4, 0.6, 1.0)" in code
+
+
+def test_walls_are_merged_and_bridged():
+    from topology import _merge_collinear_walls
+    walls = [
+        Wall(id="a", start=(0.0, 0.0), end=(2.0, 0.0)),
+        Wall(id="b", start=(2.1, 0.0), end=(4.0, 0.0)),
+        Wall(id="c", start=(0.0, 0.0), end=(0.0, 5.0)),
+    ]
+    merged = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
+    assert len(merged) == 2, f"Expected 2 merged walls, got {len(merged)}"
+    spans = {tuple(sorted([w.start, w.end])) for w in merged}
+    assert ((0.0, 0.0), (4.0, 0.0)) in spans
+    assert ((0.0, 0.0), (0.0, 5.0)) in spans
+
+
+def test_walls_do_not_merge_across_corners():
+    from topology import _merge_collinear_walls
+    walls = [
+        Wall(id="left",  start=(0.0, 0.0), end=(0.0, 5.0)),
+        Wall(id="bottom", start=(0.0, 0.0), end=(5.0, 0.0)),
+        Wall(id="right", start=(5.0, 0.0), end=(5.0, 5.0)),
+        Wall(id="top",   start=(0.0, 5.0), end=(5.0, 5.0)),
+    ]
+    merged = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
+    assert len(merged) == 4, f"Perimeter walls must stay separate, got {len(merged)}"
+
+
+def test_walls_snapped_to_90_degrees():
+    from topology import _snap_to_axis
+    wall = Wall(id="x", start=(0.0, 0.2), end=(4.0, -0.1))
+    snapped = _snap_to_axis(wall)
+    assert snapped.start[1] == snapped.end[1]
+    assert snapped.start[1] == 0.05
+
+    wall = Wall(id="y", start=(0.1, 0.0), end=(-0.05, 5.0))
+    snapped = _snap_to_axis(wall)
+    assert snapped.start[0] == snapped.end[0]
+    assert snapped.start[0] == 0.025
+
+
+def test_checker_floor_material():
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {"theme": "painted_white"},
+            "floor": {
+                "design": "checker",
+                "primary_color": "#FFFFFF",
+                "secondary_color": "#000000",
+                "tile_size_m": 0.5,
+            },
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Checker floor")
+    assert "ShaderNodeTexChecker" in code
+    assert "FloorMaterial" in code
+
+
 def test_multiple_export_formats():
     cfg = {**BASE_CFG, "export": {"formats": ["glb", "fbx"], "output_dir": "output"}}
     code = generate(one_room_scene(), cfg)

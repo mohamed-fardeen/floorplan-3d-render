@@ -24,10 +24,25 @@ export const validateGraph = async (sceneGraph: any) => {
   return response.data;
 };
 
+export interface MaterialOptions {
+  walls: {
+    theme: string;
+    color: string;
+  };
+  floor: {
+    design: string;
+    primary_color: string;
+    secondary_color: string;
+    grout_color: string;
+    tile_size_m: number;
+  };
+}
+
 export const exportBlender = async (
   sceneGraph: any, 
   includeBase: boolean = true, 
-  includeRoof: boolean = false
+  includeRoof: boolean = false,
+  materialOptions?: MaterialOptions
 ): Promise<any> => {
   try {
     const response = await fetch(`${API_BASE_URL}/export`, {
@@ -36,7 +51,8 @@ export const exportBlender = async (
       body: JSON.stringify({ 
         scene_graph: sceneGraph,
         include_base: includeBase,
-        include_roof: includeRoof
+        include_roof: includeRoof,
+        material_options: materialOptions
       }),
     });
     return await response.json();

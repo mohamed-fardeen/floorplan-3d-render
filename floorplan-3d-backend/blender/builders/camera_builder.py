@@ -6,22 +6,32 @@ Generates bpy code to create three cameras:
   3. Walkthrough camera at chest height inside first room
 """
 
+def _bbox(scene_graph):
+    xs, ys = [], []
+    for w in scene_graph.walls:
+        xs += [w.start[0], w.end[0]]
+        ys += [w.start[1], w.end[1]]
+    for r in scene_graph.rooms:
+        for x, y in r.polygon:
+            xs.append(x)
+            ys.append(y)
+    if not xs:
+        return 5.0, 5.0, 10.0
+    return (
+        (min(xs) + max(xs)) / 2.0,
+        (min(ys) + max(ys)) / 2.0,
+        max(max(xs) - min(xs), max(ys) - min(ys), 1.0),
+    )
+
+
 def build(scene_graph, cfg) -> str:
     lines = ["# ── Cameras ──────────────────────────────────────────────"]
 
-    # Compute bounding box of all walls for camera placement
+    cx_mid, cy_mid, span = _bbox(scene_graph)
     all_x, all_y = [], []
     for w in scene_graph.walls:
         all_x += [w.start[0], w.end[0]]
         all_y += [w.start[1], w.end[1]]
-
-    if not all_x:
-        # Fallback for empty scenes
-        cx_mid, cy_mid, span = 5.0, 5.0, 10.0
-    else:
-        cx_mid = (min(all_x) + max(all_x)) / 2
-        cy_mid = (min(all_y) + max(all_y)) / 2
-        span   = max(max(all_x) - min(all_x), max(all_y) - min(all_y), 1.0)
 
     # 1. Top-down orthographic
     lines += [
@@ -35,8 +45,8 @@ def build(scene_graph, cfg) -> str:
         "",
         # 2. Perspective corner
         "# Camera 2: Perspective (exterior corner view)",
-        f"bpy.ops.object.camera_add(location=({max(all_x) + span*0.6 if all_x else 10}, "
-        f"{min(all_y) - span*0.6 if all_y else -10}, {span * 0.5}))",
+        f"bpy.ops.object.camera_add(location=({cx_mid + span*0.6}, "
+        f"{cy_mid - span*0.6}, {span * 0.5}))",
         "cam_persp = bpy.context.active_object",
         "cam_persp.name = 'Camera_Perspective'",
         "cam_persp.data.type = 'PERSP'",
