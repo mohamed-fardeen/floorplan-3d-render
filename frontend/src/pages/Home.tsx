@@ -3,7 +3,7 @@ import { UploadArea } from '../components/UploadArea';
 import { ProgressTracker } from '../components/ProgressTracker';
 import type { PipelineStage } from '../components/ProgressTracker';
 import { SceneSummary } from '../components/SceneSummary';
-import { ModelViewer } from '../components/ModelViewer';
+import { ConstructionViewport } from '../components/viewport/ConstructionViewport';
 import { DownloadPanel } from '../components/DownloadPanel';
 import { AnnotatedFloorplan } from '../components/AnnotatedFloorplan';
 import { uploadAndParse, exportBlender } from '../api/client';
@@ -14,7 +14,15 @@ import { DesignOptions } from '../components/DesignOptions';
 import { useAnnotationStore } from '../store/annotationStore';
 
 interface HomeProps {
-  onOpenEditor: (sceneGraph: SceneGraph) => void;
+  onOpenEditor: (
+    sceneGraph: SceneGraph,
+    extras?: {
+      glbUrl?: string;
+      materialOptions?: MaterialOptions;
+      includeBase?: boolean;
+      includeRoof?: boolean;
+    },
+  ) => void;
 }
 
 export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
@@ -205,15 +213,26 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
         </>
       )}
 
-      {glbUrl && stage === 'complete' && <ModelViewer glbUrl={glbUrl} />}
+      {glbUrl && stage === 'complete' && sceneGraph && (
+        <div className="mx-auto mt-6 h-[500px] max-w-4xl overflow-hidden rounded-lg shadow-inner">
+          <ConstructionViewport className="h-full w-full" glbUrl={glbUrl} sceneGraph={sceneGraph} />
+        </div>
+      )}
 
       {sceneGraph && stage === 'complete' && (
         <div className="w-full max-w-2xl mx-auto mt-4 flex flex-col gap-3">
           <button
-            onClick={() => onOpenEditor(sceneGraph)}
+            onClick={() =>
+              onOpenEditor(sceneGraph, {
+                glbUrl,
+                materialOptions,
+                includeBase,
+                includeRoof,
+              })
+            }
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
           >
-            Open in Floor Plan Editor →
+            Open 3D Construction Editor →
           </button>
           
           <button

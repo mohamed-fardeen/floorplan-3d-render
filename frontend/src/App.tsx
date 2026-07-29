@@ -1,20 +1,37 @@
 import { useState } from 'react';
 import { Home } from './pages/Home';
 import { Sidebar } from './components/ui/Sidebar';
-import { EditorCanvas } from './components/editor/EditorCanvas';
-import { Preview3D } from './components/preview/Preview3D';
-import { PropertiesPanel } from './components/ui/PropertiesPanel';
+import { ConstructionViewport } from './components/viewport/ConstructionViewport';
+import { EditingPanel } from './components/editor/EditingPanel';
 import { useEditorStore } from './store/editorStore';
 import type { SceneGraph } from './types/schema';
+import type { MaterialOptions } from './api/client';
 
 type View = 'home' | 'editor';
 
+interface OpenEditorPayload {
+  sceneGraph: SceneGraph;
+  glbUrl?: string;
+  materialOptions?: MaterialOptions;
+  includeBase?: boolean;
+  includeRoof?: boolean;
+}
+
 function App() {
   const [view, setView] = useState<View>('home');
-  const { setSceneGraph } = useEditorStore();
+  const { setSceneGraph, setGlbUrl, setMaterialOptions, setExportOptions } = useEditorStore();
 
-  const handleOpenEditor = (sceneGraph: SceneGraph) => {
+  const handleOpenEditor = ({
+    sceneGraph,
+    glbUrl,
+    materialOptions,
+    includeBase = true,
+    includeRoof = false,
+  }: OpenEditorPayload) => {
     setSceneGraph(sceneGraph);
+    if (glbUrl) setGlbUrl(glbUrl);
+    if (materialOptions) setMaterialOptions(materialOptions);
+    setExportOptions(includeBase, includeRoof);
     setView('editor');
   };
 
@@ -26,14 +43,19 @@ function App() {
     return (
       <div className="flex h-screen w-full overflow-hidden">
         <Sidebar onBackToHome={handleBackToHome} />
-        <EditorCanvas />
-        <Preview3D />
-        <PropertiesPanel />
+        <ConstructionViewport className="min-w-0 flex-1" />
+        <EditingPanel />
       </div>
     );
   }
 
-  return <Home onOpenEditor={handleOpenEditor} />;
+  return (
+    <Home
+      onOpenEditor={(sceneGraph, extras) =>
+        handleOpenEditor({ sceneGraph, ...extras })
+      }
+    />
+  );
 }
 
 export default App;

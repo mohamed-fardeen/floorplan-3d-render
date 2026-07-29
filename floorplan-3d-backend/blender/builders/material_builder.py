@@ -74,13 +74,13 @@ def _wall_ridge_wave(axis: str, scale: float, var_prefix: str) -> list:
     ]
 
 
-def _wall_material(color, pattern: str, roughness: float) -> list:
+def _wall_material(color, pattern: str, roughness: float, material_name: str = "WallMaterial") -> list:
     """Build wall material: pattern first (bump), then apply chosen colour."""
     lines = [
-        f"# Wall pattern: {pattern}",
-        "if 'WallMaterial' in bpy.data.materials:",
-        "    bpy.data.materials.remove(bpy.data.materials['WallMaterial'])",
-        "mat = bpy.data.materials.new(name='WallMaterial')",
+        f"# Wall pattern: {pattern} ({material_name})",
+        f"if {material_name!r} in bpy.data.materials:",
+        f"    bpy.data.materials.remove(bpy.data.materials[{material_name!r}])",
+        f"mat = bpy.data.materials.new(name={material_name!r})",
         "mat.use_nodes = True",
         "_tree = mat.node_tree",
         "for _n in list(_tree.nodes):",
@@ -232,11 +232,28 @@ def _assign_block(prefix: str, material_name: str, include_exact: str = "") -> l
     ]
 
 
+def _assign_objects(object_names: list, material_name: str) -> list:
+    if not object_names:
+        return []
+    names_literal = ", ".join(repr(n) for n in object_names)
+    return [
+        f"_target_names = {{{names_literal}}}",
+        "for obj in bpy.data.objects:",
+        "    if obj.name in _target_names:",
+        "        if obj.type == 'MESH' and obj.data and hasattr(obj.data, 'materials'):",
+        "            obj.data.materials.clear()",
+        f"            obj.data.materials.append(bpy.data.materials[{material_name!r}])",
+        "            obj.active_material_index = 0",
+        "",
+    ]
+
+
 def build(scene_graph, cfg) -> str:
     mat_cfg = cfg.get("materials", {})
     options = cfg.get("material_options", {})
     wall_options = options.get("walls", {})
     floor_options = options.get("floor", {})
+    region_overrides = cfg.get("region_overrides", [])
 
     theme = wall_options.get("theme", "painted_white")
     wall_fallback = WALL_THEMES.get(theme, MATERIAL_PRESETS.get(mat_cfg.get("walls"), (0.95, 0.95, 0.95, 0.85))[:3])
@@ -248,6 +265,16 @@ def build(scene_graph, cfg) -> str:
     lines = ["# ── Materials ────────────────────────────────────────────"]
     lines += _wall_material(wall_color, wall_pattern, wall_roughness)
     lines += _assign_block("Wall_", "WallMaterial")
+
+    for idx, override in enumerate(region_overrides):
+        ow = override.get("walls", {})
+        o_color = _hex_rgb(ow.get("color"), wall_color)
+        o_pattern = ow.get("pattern", wall_pattern)
+        o_rough = 0.78 if o_pattern in {"stacked_coils", "woven_rope"} else 0.82
+        mat_name = f"RegionMaterial_{idx}"
+        lines += _wall_material(o_color, o_pattern, o_rough, material_name=mat_name)
+        lines += _assign_objects(override.get("object_names", []), mat_name)
+
     lines += _floor_material(floor_options)
     lines += _assign_block("Floor_", "FloorMaterial", "BasePlate")
     lines += _simple_material("CeilingMaterial", ceiling_preset[:3], ceiling_preset[3])

@@ -70,3 +70,15 @@ ehthumbs_vista.db
 # Logs
 logs
 *.log
+
+# Floorplan 3D session artifacts
+floorplan-3d-backend/uploads/
+floorplan-3d-backend/output/*.glb
+floorplan-3d-backend/output/*.blend
+floorplan-3d-backend/output/*.blend1
+floorplan-3d-backend/output/*.blend2
+floorplan-3d-backend/models/
+floorplan-3d-backend/.cache/
+floorplan-3d-backend/*.db
+floorplan-3d-backend/*.sqlite
+floorplan-3d-backend/*.sqlite3

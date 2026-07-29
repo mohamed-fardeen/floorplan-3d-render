@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -69,6 +69,30 @@ class ExportRequest(BaseModel):
 class AnnotateRequest(BaseModel):
     image_path: str
     scene_graph: SceneGraph
+
+class SelectionPayloadModel(BaseModel):
+    id: str
+    meshRefs: List[Dict[str, Any]] = Field(default_factory=list)
+    faceRefs: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class DesignOperationModel(BaseModel):
+    type: Literal["apply_pattern", "set_color", "set_material_preset"]
+    pattern: Optional[str] = None
+    value: Optional[str] = None
+    preset: Optional[str] = None
+
+class DesignApplyRequest(BaseModel):
+    scene_graph: SceneGraph
+    selection: SelectionPayloadModel
+    operations: List[DesignOperationModel]
+    material_options: MaterialOptions = Field(default_factory=MaterialOptions)
+    include_base: bool = True
+    include_roof: bool = False
+
+class AIPlanRequest(BaseModel):
+    prompt: str
+    selection_summary: Optional[Dict[str, Any]] = None
 
 @app.post("/api/upload")
 async def upload_image(
@@ -186,6 +210,81 @@ async def export_blender(req: ExportRequest):
             "export_paths": br.export_paths,
             "warnings": br.warnings,
             "script_path": br.script_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/design/apply")
+async def apply_design_actions(req: DesignApplyRequest):
+    """Validate structured design actions, translate to Blender ops, re-export GLB."""
+    from design.actions import (
+        DesignOperation,
+        SelectionPayload,
+        validate_operations,
+        translate_to_blender_options,
+    )
+
+    ops = [DesignOperation(**op.model_dump()) for op in req.operations]
+    errors = validate_operations(ops)
+    if errors:
+        raise HTTPException(status_code=400, detail={"validation_errors": errors})
+
+    selection = SelectionPayload(
+        id=req.selection.id,
+        meshRefs=req.selection.meshRefs,
+        faceRefs=req.selection.faceRefs,
+        metadata=req.selection.metadata,
+    )
+    translated = translate_to_blender_options(
+        ops,
+        req.material_options.model_dump(),
+        selection,
+    )
+
+    state = PipelineState(
+        image_path="",
+        scene_graph=req.scene_graph,
+        blender_options={
+            "include_base": req.include_base,
+            "include_roof": req.include_roof,
+            "material_options": translated["material_options"],
+            "region_overrides": translated["region_overrides"],
+            "open_blender": False,
+        },
+    )
+
+    try:
+        blender_result_dict = blender_mcp_node(state)
+        br = blender_result_dict.get("blender_result")
+        if not br or not br.success:
+            warnings = br.warnings if br else ["Unknown Blender Error"]
+            return {
+                "status": "error",
+                "detail": "; ".join(warnings),
+                "export_paths": br.export_paths if br else [],
+                "warnings": warnings,
+            }
+        return {
+            "status": "success",
+            "export_paths": br.export_paths,
+            "warnings": br.warnings,
+            "translated": translated,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/design/ai-plan")
+async def ai_design_plan(req: AIPlanRequest):
+    """Plan structured design actions from a natural-language prompt."""
+    from design.ai_planner import plan_from_prompt
+
+    try:
+        plan = plan_from_prompt(req.prompt, req.selection_summary)
+        return {
+            "status": "success",
+            "plan": plan.model_dump(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
