@@ -70,7 +70,7 @@ function wallLength(w: Wall): number {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface AnnotationPageProps {
-  onApprove: (sceneGraph: SceneGraph) => void;
+  onApprove: (sceneGraph: SceneGraph) => void | Promise<void>;
   onBack: () => void;
 }
 
@@ -268,9 +268,10 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
     setIsExporting(true);
     setExportError(null);
     try {
-      onApprove(sceneGraph);
+      await Promise.resolve(onApprove(sceneGraph));
     } catch (err: any) {
       setExportError(err.message || String(err));
+    } finally {
       setIsExporting(false);
     }
   };

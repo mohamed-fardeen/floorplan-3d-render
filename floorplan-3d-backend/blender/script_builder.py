@@ -23,6 +23,8 @@ for obj in list(bpy.data.objects):
     bpy.data.objects.remove(obj, do_unlink=True)
 for col in list(bpy.data.collections):
     bpy.data.collections.remove(col)
+for mat in list(bpy.data.materials):
+    bpy.data.materials.remove(mat)
 
 # ── Units ────────────────────────────────────────────────────────────
 bpy.context.scene.unit_settings.system = 'METRIC'
@@ -63,21 +65,54 @@ FOOTER = """\
 
 
 # ── Origin Centring ─────────────────────────────────────────────────
-# Translate every geometry object so the model's base sits at the world origin.
-_cx, _cy, _span = {cx}, {cy}, {span}
-for _obj in list(bpy.data.objects):
-    if _obj.parent or not _obj.data:
-        continue
+# Bake every geometry object's scale into its mesh, then recompute the bbox
+# in world space and translate the entire scene so the base centre sits at
+# the world origin. This makes the result robust to any base-plate padding
+# or scale changes upstream.
+for _obj in bpy.data.objects:
     if _obj.type == 'CAMERA' or _obj.type == 'LIGHT':
         continue
-    _obj.location.x -= _cx
-    _obj.location.y -= _cy
+    if _obj.data and hasattr(_obj.data, 'vertices'):
+        try:
+            bpy.context.view_layer.objects.active = _obj
+            _obj.select_set(True)
+            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        except Exception:
+            pass
+        _obj.select_set(False)
+
+_min_x, _min_y, _min_z = 1e30, 1e30, 1e30
+_max_x, _max_y, _max_z = -1e30, -1e30, -1e30
 for _obj in bpy.data.objects:
-    if _obj.type == 'CAMERA':
+    if _obj.type == 'CAMERA' or _obj.type == 'LIGHT':
+        continue
+    if not _obj.data or not hasattr(_obj.data, 'vertices'):
+        continue
+    for _v in _obj.data.vertices:
+        _w = _obj.matrix_world @ _v.co
+        if _w.x < _min_x: _min_x = _w.x
+        if _w.y < _min_y: _min_y = _w.y
+        if _w.z < _min_z: _min_z = _w.z
+        if _w.x > _max_x: _max_x = _w.x
+        if _w.y > _max_y: _max_y = _w.y
+        if _w.z > _max_z: _max_z = _w.z
+if _min_x <= _max_x:
+    _cx = (_min_x + _max_x) / 2.0
+    _cy = (_min_y + _max_y) / 2.0
+    _cz = _min_z
+    _span = max(_max_x - _min_x, _max_y - _min_y, 1.0)
+    for _obj in bpy.data.objects:
+        if _obj.type == 'CAMERA' or _obj.type == 'LIGHT':
+            continue
         _obj.location.x -= _cx
         _obj.location.y -= _cy
-        if _obj.data and _obj.data.type == 'ORTHO' and 'TopDown' in _obj.name:
-            _obj.data.ortho_scale = _span * 1.2
+        _obj.location.z -= _cz
+    for _obj in bpy.data.objects:
+        if _obj.type == 'CAMERA':
+            _obj.location.x -= _cx
+            _obj.location.y -= _cy
+            if _obj.data and _obj.data.type == 'ORTHO' and 'TopDown' in _obj.name:
+                _obj.data.ortho_scale = _span * 1.2
 """
 
 
@@ -88,9 +123,6 @@ def build_script(scene_graph, cfg: dict, output_dir: str, script_path: str) -> s
     """
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.dirname(script_path) if os.path.dirname(script_path) else ".", exist_ok=True)
-
-    cx, cy, span = _bbox(scene_graph)
-    footer = FOOTER.format(cx=cx, cy=cy, span=span)
 
     sections = [
         HEADER,
@@ -103,7 +135,7 @@ def build_script(scene_graph, cfg: dict, output_dir: str, script_path: str) -> s
         build_lighting(scene_graph, cfg),
         build_cameras(scene_graph, cfg),
         build_exports(scene_graph, cfg, output_dir),
-        footer,
+        FOOTER,
         "\nprint('Script complete.')\n",
     ]
 

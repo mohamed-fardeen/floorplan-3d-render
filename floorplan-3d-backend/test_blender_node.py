@@ -158,9 +158,66 @@ def test_custom_wall_colour():
     code = generate(one_room_scene(), cfg)
     assert_valid_python(code, "Custom wall colour")
     assert "WallMaterial" in code
-    assert "bpy.data.materials.get('WallMaterial')" in code
+    assert "bpy.data.materials.new(name='WallMaterial')" in code
     assert "mat.diffuse_color = (0.2, 0.4, 0.6, 1.0)" in code
-    assert "_bsdf.inputs['Base Color'].default_value = (0.2, 0.4, 0.6, 1.0)" in code
+    assert "wall_bsdf.inputs['Base Color'].default_value = (0.2, 0.4, 0.6, 1.0)" in code
+
+
+def test_materials_export_with_modifiers():
+    code = generate(one_room_scene())
+    assert code.index("Materials") < code.index("Export")
+    assert "export_apply=True" in code
+    assert "export_materials='EXPORT'" in code
+    assert "Apply Modifiers" not in code
+    assert "primitive_cylinder_add" not in code
+    assert "obj.data.materials.clear()" in code
+
+
+def test_stacked_coils_wall_pattern():
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {
+                "theme": "navy",
+                "color": "#34495E",
+                "pattern": "stacked_coils",
+                "pattern_color": "#FF0000",
+            },
+            "floor": {"design": "solid"},
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Stacked coils pattern")
+    assert "ShaderNodeNewGeometry" in code
+    assert "ShaderNodeTexWave" in code
+    assert "ShaderNodeValToRGB" in code
+    assert "# Wall pattern: stacked_coils" in code
+    assert "ShaderNodeBump" in code
+    assert "_hz_scale.inputs[1].default_value = 10.0" in code
+    assert "Apply Modifiers" not in code
+    assert "primitive_cylinder_add" not in code
+    assert "bpy.ops.object.join()" not in code
+    assert code.count("bpy.data.materials.new(name='WallMaterial')") == 1
+    assert "0.20392156862745098, 0.28627450980392155, 0.3686274509803922" in code
+    assert "Base Color'].default_value = (1.0, 0.0, 0.0" not in code
+
+
+def test_woven_rope_wall_pattern():
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {"theme": "warm_modern", "color": "#D8C8B8", "pattern": "woven_rope"},
+            "floor": {"design": "solid"},
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Woven rope pattern")
+    assert "ShaderNodeNewGeometry" in code
+    assert "_wx_scale.inputs[1].default_value = 4.0" in code
+    assert "_ridge_mix.operation = 'MAXIMUM'" in code
+    assert "Apply Modifiers" not in code
+    assert "primitive_cylinder_add" not in code
+    assert "bpy.ops.object.join()" not in code
 
 
 def test_walls_are_merged_and_bridged():
@@ -260,6 +317,10 @@ if __name__ == "__main__":
     test_missing_ocr_labels_no_crash()
     test_irregular_polygon()
     test_ceiling_disabled()
+    test_custom_wall_colour()
+    test_materials_export_with_modifiers()
+    test_stacked_coils_wall_pattern()
+    test_woven_rope_wall_pattern()
     test_multiple_export_formats()
     test_large_building()
     print("=" * 60)

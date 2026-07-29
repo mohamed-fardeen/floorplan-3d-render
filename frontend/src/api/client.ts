@@ -28,6 +28,8 @@ export interface MaterialOptions {
   walls: {
     theme: string;
     color: string;
+    pattern: string;
+    pattern_color: string;
   };
   floor: {
     design: string;
@@ -42,7 +44,8 @@ export const exportBlender = async (
   sceneGraph: any, 
   includeBase: boolean = true, 
   includeRoof: boolean = false,
-  materialOptions?: MaterialOptions
+  materialOptions?: MaterialOptions,
+  openBlender: boolean = false,
 ): Promise<any> => {
   try {
     const response = await fetch(`${API_BASE_URL}/export`, {
@@ -52,7 +55,8 @@ export const exportBlender = async (
         scene_graph: sceneGraph,
         include_base: includeBase,
         include_roof: includeRoof,
-        material_options: materialOptions
+        material_options: materialOptions,
+        open_blender: openBlender,
       }),
     });
     return await response.json();

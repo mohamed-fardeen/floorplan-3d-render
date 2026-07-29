@@ -193,11 +193,40 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
     if hasattr(state, "blender_options") and state.blender_options:
         cfg.update(state.blender_options)
 
-    output_dir  = os.path.abspath(cfg.get("export", {}).get("output_dir", "output"))
-    script_path = os.path.join(output_dir, "blender_scene.py")
+    output_dir = os.path.abspath(cfg.get("export", {}).get("output_dir", "output"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    import tempfile
+    import shutil
+
+    # Run from temp so uvicorn --reload does not restart mid-export.
+    script_path = os.path.join(tempfile.gettempdir(), "floorplan3d_blender_scene.py")
+    snapshot_path = os.path.join(output_dir, "blender_scene.py")
 
     from blender.script_builder import build_script
-    from blender.executor import execute_script
+    from blender.executor import execute_script, open_existing_blend
+
+    open_blender = bool(cfg.get("open_blender", False))
+    project = (state.scene_graph.metadata.project_name or "building").replace(" ", "_")
+    formats = cfg.get("export", {}).get("formats", ["glb"])
+    expected_exports = [os.path.join(output_dir, f"{project}.{fmt}") for fmt in formats]
+    blend_path = next((p for p in expected_exports if p.lower().endswith(".blend")), None)
+
+    if open_blender and blend_path and os.path.isfile(blend_path):
+        print("    Opening existing .blend (no re-export)")
+        success, export_paths, warnings = open_existing_blend(blend_path, expected_exports)
+        for w in warnings:
+            print("    " + w)
+        result = BlenderResult(
+            success=success,
+            export_paths=export_paths,
+            warnings=warnings,
+            script_path=snapshot_path,
+        )
+        return {
+            "blender_result": result,
+            "status": "completed" if success else "blender_no_exe",
+        }
 
     try:
         build_script(state.scene_graph, cfg, output_dir, script_path)
@@ -207,18 +236,28 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
             "status": "blender_failed",
             "blender_result": BlenderResult(success=False,
                                             warnings=[f"[ERROR] Script generation failed: {e}"],
-                                            script_path=script_path)
+                                            script_path=snapshot_path)
         }
 
-    success, export_paths, warnings = execute_script(script_path)
+    success, export_paths, warnings = execute_script(
+        script_path,
+        expected_exports=expected_exports,
+        open_gui=open_blender,
+    )
     for w in warnings:
         print("    " + w)
+
+    try:
+        shutil.copy2(script_path, snapshot_path)
+        print(f"    Script snapshot -> {snapshot_path}")
+    except OSError as e:
+        warnings.append(f"[WARN] Could not copy script snapshot: {e}")
 
     result = BlenderResult(
         success=success,
         export_paths=export_paths,
         warnings=warnings,
-        script_path=script_path,
+        script_path=snapshot_path,
     )
     return {
         "blender_result": result,

@@ -31,7 +31,13 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
   const [includeBase, setIncludeBase] = useState(true);
   const [includeRoof, setIncludeRoof] = useState(false);
   const [materialOptions, setMaterialOptions] = useState<MaterialOptions>({
-    walls: { theme: 'warm_modern', color: '#D8C8B8' },
+    walls: {
+      theme: 'warm_modern',
+      color: '#D8C8B8',
+      pattern: 'none',
+      // Unused by Blender; ridges always match wall colour.
+      pattern_color: '#D8C8B8',
+    },
     floor: {
       design: 'square_grid',
       primary_color: '#E8E3D9',
@@ -40,6 +46,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       tile_size_m: 0.4,
     },
   });
+  const [openingBlender, setOpeningBlender] = useState(false);
   const { setAnnotationData } = useAnnotationStore();
 
   const startPipeline = async (file: File) => {
@@ -82,7 +89,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
     setStage('blender');
     setSceneGraph(editedGraph);
     try {
-      const exportResult = await exportBlender(editedGraph, includeBase, includeRoof, materialOptions);
+      const exportResult = await exportBlender(editedGraph, includeBase, includeRoof, materialOptions, false);
       
       if (exportResult.status !== 'success') {
         throw new Error(exportResult.detail || 'Failed to export 3D model.');
@@ -107,6 +114,23 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       console.error(err);
       setStage('error');
       setError(err.message || String(err));
+    }
+  };
+
+  const handleOpenInBlender = async () => {
+    if (!sceneGraph || openingBlender) return;
+    setOpeningBlender(true);
+    setError(undefined);
+    try {
+      const exportResult = await exportBlender(sceneGraph, includeBase, includeRoof, materialOptions, true);
+      if (exportResult.status !== 'success') {
+        throw new Error(exportResult.detail || 'Failed to open Blender.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || String(err));
+    } finally {
+      setOpeningBlender(false);
     }
   };
 
@@ -193,13 +217,14 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
           </button>
           
           <button
-            onClick={() => exportBlender(sceneGraph, includeBase, includeRoof, materialOptions)}
-            className="w-full bg-orange-500 hover:bg-orange-600 text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
+            onClick={handleOpenInBlender}
+            disabled={openingBlender}
+            className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
             </svg>
-            Open in Blender
+            {openingBlender ? 'Opening Blender…' : 'Open in Blender'}
           </button>
         </div>
       )}

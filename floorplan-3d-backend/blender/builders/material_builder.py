@@ -31,22 +31,120 @@ def _hex_rgb(value: str, fallback):
 
 def _simple_material(name: str, color, roughness: float) -> list:
     return [
-        f"mat = bpy.data.materials.get({name!r}) or bpy.data.materials.new(name={name!r})",
+        f"if {name!r} in bpy.data.materials:",
+        f"    bpy.data.materials.remove(bpy.data.materials[{name!r}])",
+        f"mat = bpy.data.materials.new(name={name!r})",
         f"mat.diffuse_color = ({color[0]}, {color[1]}, {color[2]}, 1.0)",
         "mat.use_nodes = True",
         "_tree = mat.node_tree",
-        "_bsdf = next((n for n in _tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)",
-        "if _bsdf is None:",
-        "    for n in list(_tree.nodes): _tree.nodes.remove(n)",
-        "    _bsdf = _tree.nodes.new('ShaderNodeBsdfPrincipled')",
-        "    _out = _tree.nodes.new('ShaderNodeOutputMaterial')",
-        "    _tree.links.new(_bsdf.outputs['BSDF'], _out.inputs['Surface'])",
-        "    _bsdf.location = (0, 0)",
-        "    _out.location = (300, 0)",
+        "for _n in list(_tree.nodes):",
+        "    _tree.nodes.remove(_n)",
+        "_bsdf = _tree.nodes.new('ShaderNodeBsdfPrincipled')",
+        "_out = _tree.nodes.new('ShaderNodeOutputMaterial')",
+        "_tree.links.new(_bsdf.outputs['BSDF'], _out.inputs['Surface'])",
+        "_bsdf.location = (0, 0)",
+        "_out.location = (300, 0)",
         f"_bsdf.inputs['Base Color'].default_value = ({color[0]}, {color[1]}, {color[2]}, 1.0)",
         f"_bsdf.inputs['Roughness'].default_value = {roughness}",
+        "_bsdf.inputs['Metallic'].default_value = 0.0",
         "",
     ]
+
+
+def _wall_ridge_wave(axis: str, scale: float, var_prefix: str) -> list:
+    axis_idx = {"X": "X", "Y": "Y", "Z": "Z"}[axis.upper()]
+    return [
+        f"_{var_prefix}_sep = nodes.new('ShaderNodeSeparateXYZ')",
+        f"links.new(_geo.outputs['Position'], _{var_prefix}_sep.inputs['Vector'])",
+        f"_{var_prefix}_scale = nodes.new('ShaderNodeMath')",
+        f"_{var_prefix}_scale.operation = 'MULTIPLY'",
+        f"_{var_prefix}_scale.inputs[1].default_value = {scale}",
+        f"links.new(_{var_prefix}_sep.outputs['{axis_idx}'], _{var_prefix}_scale.inputs[0])",
+        f"_{var_prefix}_vec = nodes.new('ShaderNodeCombineXYZ')",
+        f"_{var_prefix}_vec.inputs['X'].default_value = 0.0",
+        f"_{var_prefix}_vec.inputs['Y'].default_value = 0.0",
+        f"links.new(_{var_prefix}_scale.outputs['Value'], _{var_prefix}_vec.inputs['Z'])",
+        f"_{var_prefix}_wave = nodes.new('ShaderNodeTexWave')",
+        f"_{var_prefix}_wave.wave_type = 'BANDS'",
+        f"_{var_prefix}_wave.bands_direction = 'Z'",
+        f"_{var_prefix}_wave.inputs['Scale'].default_value = 1.0",
+        f"_{var_prefix}_wave.inputs['Distortion'].default_value = 0.0",
+        f"_{var_prefix}_wave.inputs['Detail'].default_value = 0.0",
+        f"links.new(_{var_prefix}_vec.outputs['Vector'], _{var_prefix}_wave.inputs['Vector'])",
+    ]
+
+
+def _wall_material(color, pattern: str, roughness: float) -> list:
+    """Build wall material: pattern first (bump), then apply chosen colour."""
+    lines = [
+        f"# Wall pattern: {pattern}",
+        "if 'WallMaterial' in bpy.data.materials:",
+        "    bpy.data.materials.remove(bpy.data.materials['WallMaterial'])",
+        "mat = bpy.data.materials.new(name='WallMaterial')",
+        "mat.use_nodes = True",
+        "_tree = mat.node_tree",
+        "for _n in list(_tree.nodes):",
+        "    _tree.nodes.remove(_n)",
+        "nodes = _tree.nodes",
+        "links = _tree.links",
+        "wall_bsdf = nodes.new('ShaderNodeBsdfPrincipled')",
+        "wall_out = nodes.new('ShaderNodeOutputMaterial')",
+        "links.new(wall_bsdf.outputs['BSDF'], wall_out.inputs['Surface'])",
+        "wall_bsdf.location = (0, 0)",
+        "wall_out.location = (500, 0)",
+    ]
+
+    if pattern in {"stacked_coils", "woven_rope"}:
+        lines += [
+            "# 1) Pattern ridges (world-space horizontal bands, same colour via lighting)",
+            "_geo = nodes.new('ShaderNodeNewGeometry')",
+        ]
+        lines += _wall_ridge_wave("Z", 10.0, "hz")
+        lines += [
+            "_ridge_ramp = nodes.new('ShaderNodeValToRGB')",
+            "_ridge_ramp.color_ramp.elements[0].position = 0.40",
+            "_ridge_ramp.color_ramp.elements.new(0.60)",
+            "_ridge_ramp.color_ramp.elements[1].position = 0.60",
+        ]
+
+        if pattern == "woven_rope":
+            lines += _wall_ridge_wave("X", 4.0, "wx")
+            lines += [
+                "_ridge_mix = nodes.new('ShaderNodeMath')",
+                "_ridge_mix.operation = 'MAXIMUM'",
+                "links.new(_hz_wave.outputs['Fac'], _ridge_mix.inputs[0])",
+                "links.new(_wx_wave.outputs['Fac'], _ridge_mix.inputs[1])",
+                "links.new(_ridge_mix.outputs['Value'], _ridge_ramp.inputs['Fac'])",
+            ]
+        else:
+            lines += ["links.new(_hz_wave.outputs['Fac'], _ridge_ramp.inputs['Fac'])"]
+
+        lines += [
+            "wall_bump = nodes.new('ShaderNodeBump')",
+            "wall_bump.inputs['Strength'].default_value = 1.0",
+            "wall_bump.inputs['Distance'].default_value = 0.045",
+            "links.new(_ridge_ramp.outputs['Color'], wall_bump.inputs['Height'])",
+            "links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])",
+        ]
+
+    lines += [
+        "# 2) Apply chosen wall colour",
+        f"wall_bsdf.inputs['Base Color'].default_value = ({color[0]}, {color[1]}, {color[2]}, 1.0)",
+        f"mat.diffuse_color = ({color[0]}, {color[1]}, {color[2]}, 1.0)",
+        f"wall_bsdf.inputs['Roughness'].default_value = {roughness}",
+        "wall_bsdf.inputs['Metallic'].default_value = 0.0",
+        "",
+        "# Show materials in viewport (pattern is invisible in Solid shading)",
+        "for _win in bpy.context.window_manager.windows:",
+        "    for _area in _win.screen.areas:",
+        "        if _area.type == 'VIEW_3D':",
+        "            for _space in _area.spaces:",
+        "                if _space.type == 'VIEW_3D':",
+        "                    _space.shading.type = 'MATERIAL'",
+        "                    _space.shading.use_scene_lights = True",
+        "",
+    ]
+    return lines
 
 
 def _floor_material(options: dict) -> list:
@@ -62,11 +160,12 @@ def _floor_material(options: dict) -> list:
 
     lines += [
         "_tree = mat.node_tree",
-        "for n in list(_tree.nodes): _tree.nodes.remove(n)",
-        "_bsdf = _tree.nodes.new('ShaderNodeBsdfPrincipled')",
+        "for _n in list(_tree.nodes):",
+        "    _tree.nodes.remove(_n)",
+        "floor_bsdf = _tree.nodes.new('ShaderNodeBsdfPrincipled')",
         "_out = _tree.nodes.new('ShaderNodeOutputMaterial')",
-        "_tree.links.new(_bsdf.outputs['BSDF'], _out.inputs['Surface'])",
-        "_bsdf.location = (0, 0)",
+        "_tree.links.new(floor_bsdf.outputs['BSDF'], _out.inputs['Surface'])",
+        "floor_bsdf.location = (0, 0)",
         "_out.location = (400, 0)",
         "nodes = mat.node_tree.nodes",
         "links = mat.node_tree.links",
@@ -87,12 +186,12 @@ def _floor_material(options: dict) -> list:
             "tiles.offset_frequency = 1",
             "tiles.squash = 1.0",
             "links.new(mapping.outputs['Vector'], tiles.inputs['Vector'])",
-            "links.new(tiles.outputs['Color'], bsdf.inputs['Base Color'])",
+            "links.new(tiles.outputs['Color'], floor_bsdf.inputs['Base Color'])",
             "bump = nodes.new('ShaderNodeBump')",
             "bump.inputs['Strength'].default_value = 0.12",
             "bump.inputs['Distance'].default_value = 0.02",
             "links.new(tiles.outputs['Fac'], bump.inputs['Height'])",
-            "links.new(bump.outputs['Normal'], bsdf.inputs['Normal'])",
+            "links.new(bump.outputs['Normal'], floor_bsdf.inputs['Normal'])",
         ]
     elif design == "checker":
         lines += [
@@ -100,7 +199,7 @@ def _floor_material(options: dict) -> list:
             f"tiles.inputs['Color1'].default_value = ({primary[0]}, {primary[1]}, {primary[2]}, 1.0)",
             f"tiles.inputs['Color2'].default_value = ({secondary[0]}, {secondary[1]}, {secondary[2]}, 1.0)",
             "links.new(mapping.outputs['Vector'], tiles.inputs['Vector'])",
-            "links.new(tiles.outputs['Color'], bsdf.inputs['Base Color'])",
+            "links.new(tiles.outputs['Color'], floor_bsdf.inputs['Base Color'])",
         ]
     elif design in {"marble", "granite"}:
         lines += [
@@ -113,7 +212,7 @@ def _floor_material(options: dict) -> list:
             f"ramp.color_ramp.elements[1].color = ({secondary[0]}, {secondary[1]}, {secondary[2]}, 1.0)",
             "links.new(mapping.outputs['Vector'], tiles.inputs['Vector'])",
             "links.new(tiles.outputs['Fac'], ramp.inputs['Fac'])",
-            "links.new(ramp.outputs['Color'], bsdf.inputs['Base Color'])",
+            "links.new(ramp.outputs['Color'], floor_bsdf.inputs['Base Color'])",
         ]
     return lines + [""]
 
@@ -125,11 +224,10 @@ def _assign_block(prefix: str, material_name: str, include_exact: str = "") -> l
     return [
         "for obj in bpy.data.objects:",
         f"    if {condition}:",
-        "        if obj.data and hasattr(obj.data, 'materials'):",
-        "            if len(obj.data.materials) == 0:",
-        f"                obj.data.materials.append(bpy.data.materials[{material_name!r}])",
-        "            else:",
-        f"                obj.data.materials[0] = bpy.data.materials[{material_name!r}]",
+        "        if obj.type == 'MESH' and obj.data and hasattr(obj.data, 'materials'):",
+        "            obj.data.materials.clear()",
+        f"            obj.data.materials.append(bpy.data.materials[{material_name!r}])",
+        "            obj.active_material_index = 0",
         "",
     ]
 
@@ -143,10 +241,12 @@ def build(scene_graph, cfg) -> str:
     theme = wall_options.get("theme", "painted_white")
     wall_fallback = WALL_THEMES.get(theme, MATERIAL_PRESETS.get(mat_cfg.get("walls"), (0.95, 0.95, 0.95, 0.85))[:3])
     wall_color = _hex_rgb(wall_options.get("color"), wall_fallback)
+    wall_pattern = wall_options.get("pattern", "none")
+    wall_roughness = 0.78 if wall_pattern in {"stacked_coils", "woven_rope"} else 0.82
     ceiling_preset = MATERIAL_PRESETS.get(mat_cfg.get("ceiling", "plaster_white"), MATERIAL_PRESETS["plaster_white"])
 
     lines = ["# ── Materials ────────────────────────────────────────────"]
-    lines += _simple_material("WallMaterial", wall_color, 0.82)
+    lines += _wall_material(wall_color, wall_pattern, wall_roughness)
     lines += _assign_block("Wall_", "WallMaterial")
     lines += _floor_material(floor_options)
     lines += _assign_block("Floor_", "FloorMaterial", "BasePlate")

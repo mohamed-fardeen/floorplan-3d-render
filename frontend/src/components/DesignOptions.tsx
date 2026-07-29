@@ -41,6 +41,23 @@ const FLOOR_DESIGNS = [
   { id: 'custom', name: 'Custom', colors: null },
 ];
 
+const WALL_PATTERNS = [
+  { id: 'none', name: 'Solid', preview: 'solid' },
+  { id: 'stacked_coils', name: 'Stacked Coils', preview: 'stacked' },
+  { id: 'woven_rope', name: 'Woven Rope', preview: 'woven' },
+];
+
+/** Darken a #RRGGBB colour for ridge preview shading (same hue as the wall). */
+function shadeHex(hex: string, factor: number): string {
+  const raw = hex.replace('#', '');
+  if (raw.length !== 6) return hex;
+  const ch = (i: number) =>
+    Math.max(0, Math.min(255, Math.round(parseInt(raw.slice(i, i + 2), 16) * factor)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(0)}${ch(2)}${ch(4)}`;
+}
+
 export const DesignOptions: React.FC<DesignOptionsProps> = ({
   includeBase,
   includeRoof,
@@ -51,6 +68,8 @@ export const DesignOptions: React.FC<DesignOptionsProps> = ({
   onContinue,
   onBack,
 }) => {
+  const ridgeShade = shadeHex(materials.walls.color, 0.72);
+
   const setWallTheme = (theme: string, color: string | null) => {
     onMaterialsChange({
       ...materials,
@@ -109,6 +128,29 @@ export const DesignOptions: React.FC<DesignOptionsProps> = ({
                 <span className="font-mono">{materials.walls.color.toUpperCase()}</span>
               </label>
             )}
+            <div className="mt-6">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">Wall texture</h3>
+              <div className="grid grid-cols-3 gap-3">
+                {WALL_PATTERNS.map((pattern) => (
+                  <button key={pattern.id} type="button" onClick={() => onMaterialsChange({ ...materials, walls: { ...materials.walls, pattern: pattern.id } })} className={`overflow-hidden rounded-xl border-2 p-2 text-left transition ${materials.walls.pattern === pattern.id ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <div className="mb-2 h-16 rounded-lg border border-black/10" style={{
+                      backgroundColor: materials.walls.color,
+                      backgroundImage: pattern.preview === 'stacked'
+                        ? `repeating-linear-gradient(0deg, ${ridgeShade} 0 5px, ${materials.walls.color} 5px 11px)`
+                        : pattern.preview === 'woven'
+                          ? `repeating-linear-gradient(0deg, ${ridgeShade} 0 5px, ${materials.walls.color} 5px 11px), repeating-linear-gradient(90deg, transparent 0 11px, ${ridgeShade} 11px 13px)`
+                          : 'none',
+                    }} />
+                    <span className="text-sm font-medium text-gray-800">{pattern.name}</span>
+                  </button>
+                ))}
+              </div>
+              {materials.walls.pattern !== 'none' && (
+                <p className="mt-3 text-sm text-gray-500">
+                  Ridges use the same colour as the wall — applied as a Blender shader (Material Preview / Rendered view).
+                </p>
+              )}
+            </div>
           </section>
 
           <section>

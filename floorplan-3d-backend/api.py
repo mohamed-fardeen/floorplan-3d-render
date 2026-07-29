@@ -44,6 +44,9 @@ class ValidateRequest(BaseModel):
 class WallMaterialOptions(BaseModel):
     theme: Literal["warm_modern", "painted_white", "cool_modern", "sage", "sand", "navy", "clay", "blush", "charcoal", "olive", "sky", "custom"] = "warm_modern"
     color: str = Field("#D8C8B8", pattern=r"^#[0-9A-Fa-f]{6}$")
+    pattern: Literal["none", "woven_rope", "stacked_coils"] = "none"
+    # Kept for API compatibility; ridges always use `color` (wall colour).
+    pattern_color: str = Field("#A8907A", pattern=r"^#[0-9A-Fa-f]{6}$")
 
 class FloorMaterialOptions(BaseModel):
     design: Literal["square_grid", "checker", "terracotta", "marble", "slate", "wood", "mosaic", "sandstone", "granite", "solid", "custom"] = "square_grid"
@@ -61,6 +64,7 @@ class ExportRequest(BaseModel):
     include_base: bool = True
     include_roof: bool = True
     material_options: MaterialOptions = Field(default_factory=MaterialOptions)
+    open_blender: bool = False
 
 class AnnotateRequest(BaseModel):
     image_path: str
@@ -159,6 +163,7 @@ async def export_blender(req: ExportRequest):
             "include_base": req.include_base,
             "include_roof": req.include_roof,
             "material_options": req.material_options.model_dump(),
+            "open_blender": req.open_blender,
         }
     )
 
