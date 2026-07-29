@@ -114,10 +114,18 @@ def translate_to_blender_options(
             walls["theme"] = preset if preset in VALID_PRESETS else "custom"
 
     object_names = [m.objectName for m in selection.meshRefs if m.objectName]
+    face_refs = [
+        {
+            "objectName": fr.meshRef.objectName,
+            "faceIndex": fr.faceIndex,
+        }
+        for fr in selection.faceRefs
+    ]
     region_overrides = []
     if object_names:
         region_overrides.append({
             "object_names": object_names,
+            "face_refs": face_refs,
             "walls": dict(walls),
         })
 

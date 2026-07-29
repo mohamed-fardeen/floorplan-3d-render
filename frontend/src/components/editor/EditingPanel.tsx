@@ -19,6 +19,7 @@ export const EditingPanel: React.FC = () => {
   } = useEditorStore();
 
   const selection = getActiveSelection();
+  const renameSelection = useEditorStore((s) => s.renameSelection);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +31,7 @@ export const EditingPanel: React.FC = () => {
         </div>
         <div className="flex flex-1 items-center justify-center p-6">
           <p className="text-center text-sm text-gray-500">
-            Click, brush, or box-select geometry in the 3D viewport to edit materials.
+            Click, brush, box- or lasso-select geometry in the 3D viewport to edit materials.
           </p>
         </div>
       </div>
@@ -85,6 +86,13 @@ export const EditingPanel: React.FC = () => {
     <div className="flex h-full w-80 flex-col border-l border-gray-300 bg-gray-50">
       <div className="border-b border-gray-300 p-4">
         <h2 className="text-lg font-bold text-gray-900">Region Editor</h2>
+        <input
+          type="text"
+          value={selection.name ?? ''}
+          placeholder={`Region ${selection.id.slice(-5)}`}
+          onChange={(e) => renameSelection(selection.id, e.target.value)}
+          className="mt-2 w-full rounded border border-gray-300 px-2 py-1 text-xs"
+        />
         <p className="mt-1 text-xs text-gray-500">
           {selection.faceRefs.length} faces · {selection.meshRefs.length} meshes
         </p>

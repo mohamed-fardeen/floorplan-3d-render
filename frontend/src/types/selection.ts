@@ -28,6 +28,7 @@ export interface SelectionEditMetadata {
 
 export interface Selection {
   id: string;
+  name?: string;
   meshRefs: MeshReference[];
   faceRefs: FaceReference[];
   bounding: BoundingInfo;
@@ -45,6 +46,12 @@ export interface DesignActionPlan {
   operations: DesignOperation[];
 }
 
-export type SelectionTool = 'click' | 'brush' | 'box';
+export type SelectionTool = 'click' | 'brush' | 'box' | 'lasso';
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
+
+export interface ViewportOptions {
+  showAxes: boolean;
+  showGrid: boolean;
+  background: 'slate' | 'white' | 'night';
+}

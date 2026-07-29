@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
 import type { SelectionTool } from '../../types/selection';
 
@@ -6,6 +6,7 @@ const TOOLS: { id: SelectionTool; label: string; hint: string }[] = [
   { id: 'click', label: 'Click', hint: 'Select faces under cursor' },
   { id: 'brush', label: 'Brush', hint: 'Paint-select region' },
   { id: 'box', label: 'Box', hint: 'Drag rectangle to select' },
+  { id: 'lasso', label: 'Lasso', hint: 'Free-form polygon selection' },
 ];
 
 export const SelectionToolbar: React.FC = () => {
@@ -15,10 +16,13 @@ export const SelectionToolbar: React.FC = () => {
     brushRadius,
     setBrushRadius,
     clearSelections,
+    removeSelection,
+    renameSelection,
     selections,
     activeSelectionId,
     setActiveSelection,
   } = useEditorStore();
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-3 border-b border-gray-300 p-4">
@@ -59,7 +63,7 @@ export const SelectionToolbar: React.FC = () => {
       {selections.length > 0 && (
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-gray-600">Saved regions</span>
+            <span className="text-xs font-medium text-gray-600">Saved regions ({selections.length})</span>
             <button
               type="button"
               onClick={clearSelections}
@@ -68,18 +72,57 @@ export const SelectionToolbar: React.FC = () => {
               Clear all
             </button>
           </div>
-          {selections.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => setActiveSelection(s.id)}
-              className={`w-full rounded px-2 py-1 text-left text-xs ${
-                s.id === activeSelectionId ? 'bg-indigo-100 text-indigo-900' : 'bg-white text-gray-700'
-              }`}
-            >
-              {s.faceRefs.length} faces · {s.meshRefs.map((m) => m.objectName).slice(0, 2).join(', ')}
-            </button>
-          ))}
+          {selections.map((s) => {
+            const isActive = s.id === activeSelectionId;
+            const label = s.name ?? `Region ${s.id.slice(-5)}`;
+            return (
+              <div
+                key={s.id}
+                className={`flex items-center gap-1 rounded border px-1.5 py-1 ${
+                  isActive ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white'
+                }`}
+              >
+                {renamingId === s.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={label}
+                    onBlur={(e) => {
+                      renameSelection(s.id, e.target.value);
+                      setRenamingId(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        renameSelection(s.id, (e.target as HTMLInputElement).value);
+                        setRenamingId(null);
+                      }
+                      if (e.key === 'Escape') setRenamingId(null);
+                    }}
+                    className="flex-1 rounded border border-indigo-300 px-1 py-0.5 text-xs"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSelection(s.id)}
+                    onDoubleClick={() => setRenamingId(s.id)}
+                    className={`flex-1 truncate text-left text-xs ${
+                      isActive ? 'text-indigo-900' : 'text-gray-700'
+                    }`}
+                    title="Double-click to rename"
+                  >
+                    {label} · {s.faceRefs.length}f · {s.meshRefs.length}m
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeSelection(s.id)}
+                  className="text-xs text-gray-400 hover:text-red-600"
+                  title="Remove selection"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 

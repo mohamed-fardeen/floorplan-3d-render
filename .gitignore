@@ -38,6 +38,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Allow frontend library folder (override Python default lib/ ignore)
+!frontend/src/lib/
+!frontend/src/lib/**
 
 # Environment Variables
 .env

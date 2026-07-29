@@ -5,8 +5,25 @@ import type {
   SelectionTool,
   SyncStatus,
   DesignActionPlan,
+  ViewportOptions,
+  MeshReference,
 } from '../types/selection';
+import { mergeFaceRefs } from '../lib/selectionGeometry';
 import type { MaterialOptions } from '../api/client';
+
+function mergeMeshRefs(a: MeshReference[], b: MeshReference[]): MeshReference[] {
+  const seen = new Set<string>();
+  const out: MeshReference[] = [];
+  const push = (m: MeshReference) => {
+    const key = m.meshUuid ?? m.objectName;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(m);
+  };
+  for (const m of a) push(m);
+  for (const m of b) push(m);
+  return out;
+}
 
 interface EditorState {
   sceneGraph: SceneGraph | null;
@@ -32,6 +49,8 @@ interface EditorState {
   history: SceneGraph[];
   historyIndex: number;
 
+  viewport: ViewportOptions;
+
   setSceneGraph: (graph: SceneGraph) => void;
   setGlbUrl: (url: string | null) => void;
   bumpGlbVersion: () => void;
@@ -43,8 +62,10 @@ interface EditorState {
   setSelectionTool: (tool: SelectionTool) => void;
   setBrushRadius: (radius: number) => void;
   setActiveSelection: (id: string | null) => void;
-  addSelection: (selection: Selection) => void;
+  addSelection: (selection: Selection, merge?: boolean) => void;
+  removeSelection: (id: string) => void;
   updateSelectionMetadata: (id: string, metadata: Partial<Selection['metadata']>) => void;
+  renameSelection: (id: string, name: string) => void;
   clearSelections: () => void;
 
   updateWall: (id: string, updates: Partial<Wall>) => void;
@@ -58,6 +79,9 @@ interface EditorState {
 
   getActiveSelection: () => Selection | null;
   applyDesignPlanLocally: (plan: DesignActionPlan) => void;
+
+  setViewportOptions: (opts: Partial<ViewportOptions>) => void;
+  invalidateMeshUuids: () => void;
 }
 
 const DEFAULT_MATERIALS: MaterialOptions = {
@@ -98,6 +122,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   history: [],
   historyIndex: -1,
 
+  viewport: { showAxes: true, showGrid: true, background: 'slate' },
+
   setSceneGraph: (graph) =>
     set({
       sceneGraph: graph,
@@ -121,10 +147,35 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setBrushRadius: (radius) => set({ brushRadius: radius }),
   setActiveSelection: (id) => set({ activeSelectionId: id }),
 
-  addSelection: (selection) =>
+  addSelection: (selection, merge) =>
+    set((state) => {
+      const existing = state.selections.find((s) => s.id === selection.id);
+      const baseList = state.selections.filter((s) => s.id !== selection.id);
+      const merged = merge && existing
+        ? {
+            ...selection,
+            faceRefs: mergeFaceRefs(existing.faceRefs, selection.faceRefs),
+            meshRefs: mergeMeshRefs(existing.meshRefs, selection.meshRefs),
+            bounding: existing.bounding,
+            name: selection.name ?? existing.name,
+            metadata: { ...existing.metadata, ...selection.metadata },
+          }
+        : selection;
+      return {
+        selections: [...baseList, merged],
+        activeSelectionId: selection.id,
+      };
+    }),
+
+  removeSelection: (id) =>
     set((state) => ({
-      selections: [...state.selections.filter((s) => s.id !== selection.id), selection],
-      activeSelectionId: selection.id,
+      selections: state.selections.filter((s) => s.id !== id),
+      activeSelectionId: state.activeSelectionId === id ? null : state.activeSelectionId,
+    })),
+
+  renameSelection: (id, name) =>
+    set((state) => ({
+      selections: state.selections.map((s) => (s.id === id ? { ...s, name } : s)),
     })),
 
   updateSelectionMetadata: (id, metadata) =>
@@ -241,4 +292,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     }
   },
+
+  setViewportOptions: (opts) => set((s) => ({ viewport: { ...s.viewport, ...opts } })),
+  invalidateMeshUuids: () => set((state) => ({
+    selections: state.selections.map((s) => ({
+      ...s,
+      meshRefs: s.meshRefs.map((m) => ({ objectName: m.objectName })),
+      faceRefs: s.faceRefs.map((f) => ({ ...f, meshRef: { objectName: f.meshRef.objectName } })),
+    })),
+  })),
 }));

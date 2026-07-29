@@ -248,6 +248,52 @@ def _assign_objects(object_names: list, material_name: str) -> list:
     ]
 
 
+def _assign_face_slice(object_names: list, material_name: str, face_indices: list) -> list:
+    """
+    Assign a material to specific face indices of specific objects — used for
+    per-face / per-region overrides where we cannot replace the whole material.
+
+    Falls back to whole-object assignment if no face indices are provided.
+    """
+    if not object_names:
+        return []
+    if not face_indices:
+        return _assign_objects(object_names, material_name)
+
+    names_literal = ", ".join(repr(n) for n in object_names)
+    face_set_literal = repr(set(int(f) for f in face_indices))
+    return [
+        f"_target_names = {{{names_literal}}}",
+        f"_target_faces = {face_set_literal}",
+        "for obj in bpy.data.objects:",
+        "    if obj.name not in _target_names:",
+        "        continue",
+        "    if obj.type != 'MESH' or not obj.data:",
+        "        continue",
+        "    if not hasattr(obj.data, 'materials'):",
+        "        continue",
+        f"    if {material_name!r} not in bpy.data.materials:",
+        "        continue",
+        f"    _mat = bpy.data.materials[{material_name!r}]",
+        # Ensure the material exists as a slot; if it already does, reuse it.
+        "    _slot = -1",
+        "    for _i, _m in enumerate(obj.data.materials):",
+        "        if _m is _mat:",
+        "            _slot = _i",
+        "            break",
+        "    if _slot < 0:",
+        "        obj.data.materials.append(_mat)",
+        "        _slot = len(obj.data.materials) - 1",
+        # Bind every polygon in the slice to this slot.
+        "    for _poly in obj.data.polygons:",
+        "        if _poly.index in _target_faces:",
+        "            _poly.material_index = _slot",
+        # Active slot stays consistent for any subsequent ops.
+        f"    obj.active_material_index = _slot",
+        "",
+    ]
+
+
 def build(scene_graph, cfg) -> str:
     mat_cfg = cfg.get("materials", {})
     options = cfg.get("material_options", {})
@@ -273,7 +319,22 @@ def build(scene_graph, cfg) -> str:
         o_rough = 0.78 if o_pattern in {"stacked_coils", "woven_rope"} else 0.82
         mat_name = f"RegionMaterial_{idx}"
         lines += _wall_material(o_color, o_pattern, o_rough, material_name=mat_name)
-        lines += _assign_objects(override.get("object_names", []), mat_name)
+
+        object_names = override.get("object_names", []) or []
+        face_refs = override.get("face_refs", []) or []
+        per_object_faces: dict = {}
+        for fr in face_refs:
+            obj_name = fr.get("objectName") if isinstance(fr, dict) else None
+            fi = fr.get("faceIndex") if isinstance(fr, dict) else None
+            if not obj_name or fi is None:
+                continue
+            per_object_faces.setdefault(obj_name, []).append(int(fi))
+
+        if per_object_faces:
+            for obj_name, faces in per_object_faces.items():
+                lines += _assign_face_slice([obj_name], mat_name, faces)
+        else:
+            lines += _assign_objects(object_names, mat_name)
 
     lines += _floor_material(floor_options)
     lines += _assign_block("Floor_", "FloorMaterial", "BasePlate")

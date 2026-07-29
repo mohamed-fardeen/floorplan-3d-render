@@ -3,6 +3,7 @@ import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Grid, useGLTF, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useEditorStore } from '../../store/editorStore';
+import type { SceneGraph } from '../../types/schema';
 import {
   buildHighlightGeometry,
   createSelectionFromFaces,
@@ -192,6 +193,9 @@ const PickHandler: React.FC<PickHandlerProps> = ({ root, disabled }) => {
       {selectionTool === 'box' && root && (
         <BoxSelectOverlay root={root} disabled={disabled} />
       )}
+      {selectionTool === 'lasso' && root && (
+        <LassoOverlay root={root} disabled={disabled} />
+      )}
     </>
   );
 };
@@ -295,6 +299,131 @@ const BoxSelectOverlay: React.FC<BoxSelectOverlayProps> = ({ root, disabled }) =
   );
 };
 
+interface LassoOverlayProps {
+  root: THREE.Group;
+  disabled: boolean;
+}
+
+function pointInPolygon(point: [number, number], polygon: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    const intersect =
+      yi > point[1] !== yj > point[1] &&
+      point[0] < ((xj - xi) * (point[1] - yi)) / (yj - yi || 1e-9) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
+  const { camera, gl } = useThree();
+  const { addSelection } = useEditorStore();
+  const [path, setPath] = useState<[number, number][]>([]);
+  const drawingRef = useRef(false);
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const rect = () => el.getBoundingClientRect();
+
+    const onDown = (e: PointerEvent) => {
+      if (disabled || e.button !== 0) return;
+      drawingRef.current = true;
+      const r = rect();
+      setPath([[e.clientX - r.left, e.clientY - r.top]]);
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!drawingRef.current) return;
+      const r = rect();
+      setPath((prev) => {
+        const last = prev[prev.length - 1];
+        if (!last) return [[e.clientX - r.left, e.clientY - r.top]];
+        const dx = e.clientX - r.left - last[0];
+        const dy = e.clientY - r.top - last[1];
+        if (dx * dx + dy * dy < 9) return prev;
+        return [...prev, [e.clientX - r.left, e.clientY - r.top]];
+      });
+    };
+
+    const onUp = () => {
+      if (!drawingRef.current) return;
+      drawingRef.current = false;
+      const polygon = pathRef.current;
+      setPath([]);
+      if (polygon.length < 3) return;
+      const r = rect();
+      const minX = 0;
+      const maxX = r.width;
+      const minY = 0;
+      const maxY = r.height;
+
+      const faceRefs: FaceReference[] = [];
+      root.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const mesh = child as THREE.Mesh;
+        if (!mesh.geometry) return;
+        const pos = mesh.geometry.getAttribute('position');
+        const idx = mesh.geometry.getIndex();
+        if (!pos) return;
+        const faceCount = idx ? idx.count / 3 : pos.count / 3;
+        for (let fi = 0; fi < faceCount; fi++) {
+          const a = idx ? idx.getX(fi * 3) : fi * 3;
+          const b = idx ? idx.getX(fi * 3 + 1) : fi * 3 + 1;
+          const c = idx ? idx.getX(fi * 3 + 2) : fi * 3 + 2;
+          const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+          const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
+          const cz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+          const world = new THREE.Vector3(cx, cy, cz).applyMatrix4(mesh.matrixWorld);
+          const projected = world.clone().project(camera);
+          const sx = ((projected.x + 1) / 2) * r.width;
+          const sy = ((-projected.y + 1) / 2) * r.height;
+          if (sx < minX || sx > maxX || sy < minY || sy > maxY) continue;
+          if (pointInPolygon([sx, sy], polygon)) {
+            faceRefs.push({
+              meshRef: { objectName: meshObjectName(mesh), meshUuid: mesh.uuid },
+              faceIndex: fi,
+            });
+          }
+        }
+      });
+
+      if (faceRefs.length > 0) {
+        addSelection(createSelectionFromFaces(root, faceRefs));
+      }
+    };
+
+    el.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      el.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [root, gl.domElement, camera, addSelection, disabled]);
+
+  const pathRef = useRef(path);
+  useEffect(() => {
+    pathRef.current = path;
+  }, [path]);
+
+  if (path.length === 0) return null;
+
+  const d = path
+    .map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`)
+    .join(' ');
+
+  return (
+    <Html fullscreen style={{ pointerEvents: 'none' }}>
+      <svg className="absolute inset-0 h-full w-full" style={{ pointerEvents: 'none' }}>
+        <path d={d} fill="rgba(79,70,229,0.18)" stroke="#4f46e5" strokeWidth={1.5} />
+      </svg>
+    </Html>
+  );
+};
+
 interface SceneContentProps {
   glbUrl: string;
   version: number;
@@ -302,6 +431,7 @@ interface SceneContentProps {
 
 const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version }) => {
   const [root, setRoot] = useState<THREE.Group | null>(null);
+  const { viewport } = useEditorStore();
 
   return (
     <>
@@ -309,17 +439,19 @@ const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version }) => {
       <directionalLight position={[8, 14, 6]} intensity={1.1} castShadow shadow-mapSize={[2048, 2048]} />
       <directionalLight position={[-6, 8, -4]} intensity={0.35} />
 
-      <Grid
-        infiniteGrid
-        cellSize={0.5}
-        sectionSize={2}
-        fadeDistance={40}
-        fadeStrength={1}
-        cellColor="#6b7280"
-        sectionColor="#374151"
-      />
+      {viewport.showGrid && (
+        <Grid
+          infiniteGrid
+          cellSize={0.5}
+          sectionSize={2}
+          fadeDistance={40}
+          fadeStrength={1}
+          cellColor="#6b7280"
+          sectionColor="#374151"
+        />
+      )}
 
-      {import.meta.env.DEV && <axesHelper args={[2]} />}
+      {viewport.showAxes && (import.meta.env.DEV || true) && <axesHelper args={[2]} />}
 
       <Suspense fallback={null}>
         <BuildingModel url={glbUrl} version={version} onSceneReady={setRoot} />
@@ -342,8 +474,6 @@ const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version }) => {
   );
 };
 
-import type { SceneGraph } from '../../types/schema';
-
 interface ConstructionViewportProps {
   className?: string;
   glbUrl?: string | null;
@@ -360,6 +490,14 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
   const sceneGraph = sceneGraphProp ?? store.sceneGraph;
   const glbVersion = store.glbVersion;
   const syncStatus = store.syncStatus;
+  const lastVersionRef = React.useRef(glbVersion);
+
+  React.useEffect(() => {
+    if (lastVersionRef.current !== glbVersion) {
+      lastVersionRef.current = glbVersion;
+      store.invalidateMeshUuids();
+    }
+  }, [glbVersion, store]);
 
   const resetCamera = () => {
     const canvas = document.querySelector('[data-construction-viewport] canvas');
@@ -403,6 +541,7 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
       </div>
 
       <div className="absolute top-3 right-3 z-10 flex gap-2">
+        <ViewportMenu />
         <button
           type="button"
           onClick={resetCamera}
@@ -438,4 +577,32 @@ const CameraResetListener: React.FC = () => {
     return () => window.removeEventListener('construction-viewport-reset', handler);
   }, [camera]);
   return null;
+};
+
+const ViewportMenu: React.FC = () => {
+  const { viewport, setViewportOptions } = useEditorStore();
+  return (
+    <div className="flex gap-1 rounded bg-white/10 p-1 backdrop-blur">
+      <button
+        type="button"
+        onClick={() => setViewportOptions({ showGrid: !viewport.showGrid })}
+        className={`rounded px-2 py-1 text-xs ${
+          viewport.showGrid ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
+        }`}
+        title="Toggle grid"
+      >
+        Grid
+      </button>
+      <button
+        type="button"
+        onClick={() => setViewportOptions({ showAxes: !viewport.showAxes })}
+        className={`rounded px-2 py-1 text-xs ${
+          viewport.showAxes ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
+        }`}
+        title="Toggle axes"
+      >
+        Axes
+      </button>
+    </div>
+  );
 };
