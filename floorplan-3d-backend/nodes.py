@@ -196,10 +196,20 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
     output_dir = os.path.abspath(cfg.get("export", {}).get("output_dir", "output"))
     os.makedirs(output_dir, exist_ok=True)
 
+    emit = cfg.get("progress_emitter")
+
+    def _emit(stage: str, message: str, **extra) -> None:
+        if emit is None:
+            return
+        try:
+            emit(stage, message, **extra)
+        except Exception as e:
+            print(f"    [WARN] progress emit failed: {e}")
+
+    _emit("script", "Building Blender script")
     import tempfile
     import shutil
 
-    # Run from temp so uvicorn --reload does not restart mid-export.
     script_path = os.path.join(tempfile.gettempdir(), "floorplan3d_blender_scene.py")
     snapshot_path = os.path.join(output_dir, "blender_scene.py")
 
@@ -214,6 +224,7 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
 
     if open_blender and blend_path and os.path.isfile(blend_path):
         print("    Opening existing .blend (no re-export)")
+        _emit("blender", "Opening existing .blend")
         success, export_paths, warnings = open_existing_blend(blend_path, expected_exports)
         for w in warnings:
             print("    " + w)
@@ -231,7 +242,9 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
     try:
         build_script(state.scene_graph, cfg, output_dir, script_path)
         print(f"    Script written -> {script_path}")
+        _emit("script", "Script written", path=script_path)
     except Exception as e:
+        _emit("error", f"Script generation failed: {e}")
         return {
             "status": "blender_failed",
             "blender_result": BlenderResult(success=False,
@@ -239,6 +252,7 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
                                             script_path=snapshot_path)
         }
 
+    _emit("execute", "Executing Blender", mode="headless")
     success, export_paths, warnings = execute_script(
         script_path,
         expected_exports=expected_exports,
@@ -252,6 +266,8 @@ def blender_mcp_node(state: PipelineState) -> Dict[str, Any]:
         print(f"    Script snapshot -> {snapshot_path}")
     except OSError as e:
         warnings.append(f"[WARN] Could not copy script snapshot: {e}")
+
+    _emit("export", "Export complete", paths=export_paths)
 
     result = BlenderResult(
         success=success,

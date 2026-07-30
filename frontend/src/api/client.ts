@@ -113,3 +113,64 @@ export const planDesignFromPrompt = async (req: {
     return { status: 'error', detail: String(error) };
   }
 };
+
+export interface DesignProgressEvent {
+  stage: string;
+  message: string;
+  ts?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Open an EventSource for design progress. Returns the EventSource and a
+ * cleanup function. The caller subscribes to `onEvent` for each payload.
+ */
+export function openDesignStream(
+  onEvent: (event: DesignProgressEvent) => void,
+  onError?: (err: Event) => void,
+): { source: EventSource; close: () => void } {
+  const source = new EventSource(`${API_BASE_URL}/design/stream`);
+  const handler = (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data) as DesignProgressEvent;
+      onEvent(data);
+    } catch (err) {
+      console.warn('[stream] failed to parse event', err);
+    }
+  };
+  source.addEventListener('data' as never, handler as never);
+  source.onerror = (e) => {
+    if (onError) onError(e);
+  };
+  return {
+    source,
+    close: () => {
+      source.removeEventListener('data' as never, handler as never);
+      source.close();
+    },
+  };
+}
+
+export async function launchBlenderMcp(blendPath?: string): Promise<{ status: string; pid?: number }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/mcp/launch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(blendPath ? { blend_path: blendPath } : {}),
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('API Error (launchBlenderMcp):', error);
+    return { status: 'error' };
+  }
+}
+
+export async function getBlenderMcpStatus(): Promise<{ available: boolean; info?: unknown }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/mcp/status`);
+    return await response.json();
+  } catch (error) {
+    console.error('API Error (getBlenderMcpStatus):', error);
+    return { available: false };
+  }
+}

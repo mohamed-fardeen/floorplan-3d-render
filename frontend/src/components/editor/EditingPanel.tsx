@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
 import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
-import { applyDesignActions } from '../../api/client';
+import { applyDesignActions, openDesignStream } from '../../api/client';
 
 export const EditingPanel: React.FC = () => {
   const {
@@ -13,13 +13,24 @@ export const EditingPanel: React.FC = () => {
     includeBase,
     includeRoof,
     setSyncStatus,
+    setSyncStage,
     bumpGlbVersion,
     setGlbUrl,
     applyDesignPlanLocally,
   } = useEditorStore();
+  const renameSelection = useEditorStore((s) => s.renameSelection);
+
+  useEffect(() => {
+    const { close } = openDesignStream((event) => {
+      setSyncStage(event.stage ?? null, event.message ?? null);
+      if (event.stage === 'done' || event.stage === 'error') {
+        setSyncStage(null, null);
+      }
+    });
+    return close;
+  }, [setSyncStage]);
 
   const selection = getActiveSelection();
-  const renameSelection = useEditorStore((s) => s.renameSelection);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

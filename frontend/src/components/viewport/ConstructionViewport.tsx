@@ -12,9 +12,25 @@ import {
   meshObjectName,
   raycastMeshes,
 } from '../../lib/selectionGeometry';
+import { isVisibleAt, renderDepthMask } from '../../lib/depthPick';
 import type { FaceReference } from '../../types/selection';
 
 const HIGHLIGHT_COLOR = '#4f46e5';
+
+function safeRenderDepthMask(
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  renderer: THREE.WebGLRenderer,
+  width: number,
+  height: number,
+) {
+  try {
+    return renderDepthMask(scene, camera, width, height, renderer);
+  } catch (err) {
+    console.warn('[depthPick] depth mask unavailable, falling back to geometric', err);
+    return null;
+  }
+}
 
 interface BuildingModelProps {
   url: string;
@@ -206,7 +222,7 @@ interface BoxSelectOverlayProps {
 }
 
 const BoxSelectOverlay: React.FC<BoxSelectOverlayProps> = ({ root, disabled }) => {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   const { addSelection } = useEditorStore();
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
@@ -229,6 +245,8 @@ const BoxSelectOverlay: React.FC<BoxSelectOverlayProps> = ({ root, disabled }) =
     const minY = Math.min(drag.y0, drag.y1) - rect.top;
     const maxY = Math.max(drag.y0, drag.y1) - rect.top;
 
+    const depthMask = safeRenderDepthMask(scene, camera, gl, rect.width, rect.height);
+
     const faceRefs: FaceReference[] = [];
     root.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return;
@@ -248,6 +266,7 @@ const BoxSelectOverlay: React.FC<BoxSelectOverlayProps> = ({ root, disabled }) =
         const sx = ((projected.x + 1) / 2) * rect.width;
         const sy = ((-projected.y + 1) / 2) * rect.height;
         if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+          if (depthMask && !isVisibleAt(world, camera, depthMask)) continue;
           faceRefs.push({
             meshRef: { objectName: meshObjectName(mesh), meshUuid: mesh.uuid },
             faceIndex: fi,
@@ -318,7 +337,7 @@ function pointInPolygon(point: [number, number], polygon: [number, number][]): b
 }
 
 const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   const { addSelection } = useEditorStore();
   const [path, setPath] = useState<[number, number][]>([]);
   const drawingRef = useRef(false);
@@ -358,6 +377,7 @@ const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
       const maxX = r.width;
       const minY = 0;
       const maxY = r.height;
+      const depthMask = safeRenderDepthMask(scene, camera, gl, r.width, r.height);
 
       const faceRefs: FaceReference[] = [];
       root.traverse((child) => {
@@ -380,6 +400,7 @@ const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
           const sx = ((projected.x + 1) / 2) * r.width;
           const sy = ((-projected.y + 1) / 2) * r.height;
           if (sx < minX || sx > maxX || sy < minY || sy > maxY) continue;
+          if (depthMask && !isVisibleAt(world, camera, depthMask)) continue;
           if (pointInPolygon([sx, sy], polygon)) {
             faceRefs.push({
               meshRef: { objectName: meshObjectName(mesh), meshUuid: mesh.uuid },
@@ -402,7 +423,7 @@ const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [root, gl.domElement, camera, addSelection, disabled]);
+  }, [root, gl.domElement, gl, scene, camera, addSelection, disabled]);
 
   const pathRef = useRef(path);
   useEffect(() => {
@@ -490,6 +511,8 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
   const sceneGraph = sceneGraphProp ?? store.sceneGraph;
   const glbVersion = store.glbVersion;
   const syncStatus = store.syncStatus;
+  const syncStage = store.syncStage;
+  const syncMessage = store.syncMessage;
   const lastVersionRef = React.useRef(glbVersion);
 
   React.useEffect(() => {
@@ -530,7 +553,9 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
           3D Construction Editor
         </span>
         {syncStatus === 'syncing' && (
-          <span className="rounded bg-amber-500/90 px-2 py-1 text-xs text-white">Syncing…</span>
+          <span className="rounded bg-amber-500/90 px-2 py-1 text-xs text-white">
+            {syncStage ? `${syncStage}: ${syncMessage ?? ''}` : 'Syncing…'}
+          </span>
         )}
         {syncStatus === 'synced' && (
           <span className="rounded bg-emerald-600/90 px-2 py-1 text-xs text-white">Synced</span>

@@ -2,6 +2,7 @@ import os
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import shutil
 import uuid
@@ -224,10 +225,13 @@ async def apply_design_actions(req: DesignApplyRequest):
         validate_operations,
         translate_to_blender_options,
     )
+    from design.progress import emit
 
+    emit("validation", "Validating design actions")
     ops = [DesignOperation(**op.model_dump()) for op in req.operations]
     errors = validate_operations(ops)
     if errors:
+        emit("error", "Validation failed", errors=errors)
         raise HTTPException(status_code=400, detail={"validation_errors": errors})
 
     selection = SelectionPayload(
@@ -236,43 +240,146 @@ async def apply_design_actions(req: DesignApplyRequest):
         faceRefs=req.selection.faceRefs,
         metadata=req.selection.metadata,
     )
+    emit("translation", "Translating to Blender ops")
     translated = translate_to_blender_options(
         ops,
         req.material_options.model_dump(),
         selection,
     )
 
-    state = PipelineState(
-        image_path="",
-        scene_graph=req.scene_graph,
-        blender_options={
-            "include_base": req.include_base,
-            "include_roof": req.include_roof,
-            "material_options": translated["material_options"],
-            "region_overrides": translated["region_overrides"],
-            "open_blender": False,
-        },
+    # Prefer the live MCP client when a Blender instance is reachable.
+    from blender.mcp_client import (
+        assign_region_material,
+        export_glb,
+        is_blender_mcp_available,
     )
 
-    try:
-        blender_result_dict = blender_mcp_node(state)
-        br = blender_result_dict.get("blender_result")
-        if not br or not br.success:
-            warnings = br.warnings if br else ["Unknown Blender Error"]
-            return {
-                "status": "error",
-                "detail": "; ".join(warnings),
-                "export_paths": br.export_paths if br else [],
-                "warnings": warnings,
-            }
-        return {
-            "status": "success",
-            "export_paths": br.export_paths,
-            "warnings": br.warnings,
-            "translated": translated,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    use_live_mcp = False
+    export_paths: List[str] = []
+    warnings: List[str] = []
+
+    if is_blender_mcp_available():
+        use_live_mcp = True
+        emit("mcp", "Live MCP detected — applying granular ops")
+        # Build per-object material assignments for each region override.
+        for idx, override in enumerate(translated["region_overrides"]):
+            mat_name = f"RegionMaterial_{idx}"
+            faces_by_object: Dict[str, List[int]] = {}
+            for fr in override.get("face_refs", []) or []:
+                obj_name = fr.get("objectName") if isinstance(fr, dict) else None
+                fi = fr.get("faceIndex") if isinstance(fr, dict) else None
+                if not obj_name or fi is None:
+                    continue
+                faces_by_object.setdefault(obj_name, []).append(int(fi))
+            ok, payload = assign_region_material(
+                override.get("object_names", []) or [],
+                faces_by_object,
+                mat_name,
+            )
+            if not ok:
+                warnings.append(f"[WARN] MCP assign failed for {mat_name}: {payload}")
+        # Material must exist on the Blender side. Emit only the material
+        # Python (no scene rebuild, no export) and ship it via MCP.
+        from blender.builders import build_materials
+        import tempfile as _tf
+        import os as _os
+
+        script_path = _os.path.join(_tf.gettempdir(), "floorplan3d_mcp_apply.py")
+        output_dir = _os.path.abspath("output")
+        _os.makedirs(output_dir, exist_ok=True)
+        try:
+            mat_code = build_materials(
+                req.scene_graph,
+                {
+                    "materials": {},
+                    "material_options": translated["material_options"],
+                    "region_overrides": translated["region_overrides"],
+                    "export": {"output_dir": output_dir, "formats": []},
+                },
+            )
+            with open(script_path, "w", encoding="utf-8") as fh:
+                fh.write(mat_code)
+        except Exception as exc:
+            warnings.append(f"[WARN] live material build failed: {exc}")
+        else:
+            with open(script_path, "r", encoding="utf-8") as fh:
+                code = fh.read()
+            from blender.mcp_client import send_command
+            ok, payload = send_command({"type": "execute_code", "code": code})
+            if not ok:
+                warnings.append(f"[WARN] MCP execute_code failed: {payload}")
+        # Export the current scene to GLB via MCP.
+        project = (req.scene_graph.metadata.project_name or "building").replace(" ", "_")
+        glb_path = _os.path.join(output_dir, f"{project}.glb")
+        ok, payload = export_glb(glb_path)
+        if ok and isinstance(payload, dict) and payload.get("path"):
+            export_paths = [payload["path"]]
+
+    if not use_live_mcp or not export_paths:
+        state = PipelineState(
+            image_path="",
+            scene_graph=req.scene_graph,
+            blender_options={
+                "include_base": req.include_base,
+                "include_roof": req.include_roof,
+                "material_options": translated["material_options"],
+                "region_overrides": translated["region_overrides"],
+                "open_blender": False,
+                "progress_emitter": emit,
+            },
+        )
+
+        try:
+            emit("blender", "Dispatching to Blender (script mode)")
+            blender_result_dict = blender_mcp_node(state)
+            br = blender_result_dict.get("blender_result")
+            if not br or not br.success:
+                warnings.extend(br.warnings if br else ["Unknown Blender Error"])
+                emit("error", "Blender sync failed", warnings=warnings)
+                return {
+                    "status": "error",
+                    "detail": "; ".join(warnings),
+                    "export_paths": br.export_paths if br else [],
+                    "warnings": warnings,
+                }
+            export_paths = br.export_paths
+        except Exception as e:
+            emit("error", f"Exception: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    emit("done", "Blender sync complete", export_paths=export_paths)
+    return {
+        "status": "success",
+        "export_paths": export_paths,
+        "warnings": warnings,
+        "translated": translated,
+        "live_mcp": use_live_mcp,
+    }
+
+
+@app.get("/api/design/stream")
+async def design_stream():
+    """Server-Sent Events stream of design progress."""
+    from design.progress import stream
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.post("/api/mcp/launch")
+async def launch_mcp(blend_path: Optional[str] = None):
+    """Spawn a Blender subprocess with the MCP addon loaded."""
+    from blender.mcp_launcher import launch_blender_with_mcp
+    proc = launch_blender_with_mcp(blend_path)
+    if proc is None:
+        raise HTTPException(status_code=503, detail="Blender executable not found")
+    return {"status": "started", "pid": proc.pid}
+
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    from blender.mcp_client import is_blender_mcp_available, ping
+    available = is_blender_mcp_available()
+    info = ping() if available else None
+    return {"available": available, "info": info}
 
 
 @app.post("/api/design/ai-plan")

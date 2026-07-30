@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
-import { validateGraph, exportBlender } from '../../api/client';
+import {
+  validateGraph,
+  exportBlender,
+  getBlenderMcpStatus,
+  launchBlenderMcp,
+} from '../../api/client';
 import { SelectionToolbar } from '../editor/SelectionToolbar';
 import { AIEditPanel } from '../editor/AIEditPanel';
 import { ArrowLeft } from 'lucide-react';
@@ -13,8 +18,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
   const {
     undo,
     redo,
+    undoSelection,
+    redoSelection,
     historyIndex,
     history,
+    selectionHistoryIndex,
+    selectionHistory,
     sceneGraph,
     setSceneGraph,
     materialOptions,
@@ -23,9 +32,37 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
     setGlbUrl,
     bumpGlbVersion,
     setSyncStatus,
+    persistProject,
   } = useEditorStore();
 
   const [syncing, setSyncing] = useState(false);
+  const [mcpAvailable, setMcpAvailable] = useState(false);
+  const [launchingMcp, setLaunchingMcp] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const status = await getBlenderMcpStatus();
+      if (!cancelled) setMcpAvailable(status.available);
+    };
+    probe();
+    const handle = window.setInterval(probe, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
+
+  const handleLaunchMcp = async () => {
+    setLaunchingMcp(true);
+    try {
+      await launchBlenderMcp();
+      const status = await getBlenderMcpStatus();
+      setMcpAvailable(status.available);
+    } finally {
+      setLaunchingMcp(false);
+    }
+  };
 
   const handleValidate = async () => {
     if (!sceneGraph) return;
@@ -89,22 +126,48 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
 
       <SelectionToolbar />
 
-      <div className="flex justify-between border-b border-gray-300 p-4">
+      <div className="grid grid-cols-2 gap-2 border-b border-gray-300 p-4">
         <button
           type="button"
           onClick={undo}
           disabled={historyIndex <= 0}
-          className="rounded bg-gray-300 px-3 py-1 disabled:opacity-50"
+          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
         >
-          Undo
+          Undo graph
         </button>
         <button
           type="button"
           onClick={redo}
           disabled={historyIndex >= history.length - 1}
-          className="rounded bg-gray-300 px-3 py-1 disabled:opacity-50"
+          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
         >
-          Redo
+          Redo graph
+        </button>
+        <button
+          type="button"
+          onClick={undoSelection}
+          disabled={selectionHistoryIndex <= 0}
+          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
+        >
+          Undo selection
+        </button>
+        <button
+          type="button"
+          onClick={redoSelection}
+          disabled={selectionHistoryIndex >= selectionHistory.length - 1}
+          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
+        >
+          Redo selection
+        </button>
+      </div>
+      <div className="border-b border-gray-300 px-4 py-2">
+        <button
+          type="button"
+          onClick={() => persistProject()}
+          disabled={!sceneGraph}
+          className="w-full rounded bg-slate-200 px-2 py-1 text-xs text-slate-800 hover:bg-slate-300 disabled:opacity-50"
+        >
+          Save session to browser
         </button>
       </div>
 
@@ -127,6 +190,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
         >
           {syncing ? 'Syncing…' : 'Sync to Blender'}
         </button>
+        <div className="mt-2 flex items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1.5 text-xs">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              mcpAvailable ? 'bg-emerald-500' : 'bg-gray-400'
+            }`}
+          />
+          <span className="text-gray-700">
+            Live MCP {mcpAvailable ? 'connected' : 'offline'}
+          </span>
+          {!mcpAvailable && (
+            <button
+              type="button"
+              onClick={handleLaunchMcp}
+              disabled={launchingMcp}
+              className="ml-auto rounded bg-indigo-600 px-2 py-0.5 text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {launchingMcp ? 'Launching…' : 'Launch'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

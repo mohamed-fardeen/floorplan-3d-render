@@ -9,6 +9,11 @@ import type {
   MeshReference,
 } from '../types/selection';
 import { mergeFaceRefs } from '../lib/selectionGeometry';
+import {
+  deriveProjectId,
+  loadProjectState,
+  saveProjectState,
+} from '../lib/persistence';
 import type { MaterialOptions } from '../api/client';
 
 function mergeMeshRefs(a: MeshReference[], b: MeshReference[]): MeshReference[] {
@@ -31,6 +36,9 @@ interface EditorState {
   glbVersion: number;
   syncStatus: SyncStatus;
   syncError: string | null;
+  syncStage: string | null;
+  syncMessage: string | null;
+  syncStartedAt: number | null;
 
   /** Legacy object selection (2D Konva editor). */
   selectedObjectId: string | null;
@@ -49,12 +57,17 @@ interface EditorState {
   history: SceneGraph[];
   historyIndex: number;
 
+  /** Selection-only history, separate from sceneGraph history. */
+  selectionHistory: Selection[][];
+  selectionHistoryIndex: number;
+
   viewport: ViewportOptions;
 
   setSceneGraph: (graph: SceneGraph) => void;
   setGlbUrl: (url: string | null) => void;
   bumpGlbVersion: () => void;
   setSyncStatus: (status: SyncStatus, error?: string | null) => void;
+  setSyncStage: (stage: string | null, message: string | null) => void;
   setMaterialOptions: (opts: MaterialOptions) => void;
   setExportOptions: (includeBase: boolean, includeRoof: boolean) => void;
 
@@ -77,11 +90,19 @@ interface EditorState {
   redo: () => void;
   pushHistory: () => void;
 
+  pushSelectionHistory: () => void;
+  undoSelection: () => void;
+  redoSelection: () => void;
+
   getActiveSelection: () => Selection | null;
   applyDesignPlanLocally: (plan: DesignActionPlan) => void;
 
   setViewportOptions: (opts: Partial<ViewportOptions>) => void;
   invalidateMeshUuids: () => void;
+
+  loadProject: (projectId: string) => void;
+  persistProject: (projectId?: string) => void;
+  resetSelectionsToPersisted: () => void;
 }
 
 const DEFAULT_MATERIALS: MaterialOptions = {
@@ -106,6 +127,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   glbVersion: 0,
   syncStatus: 'idle',
   syncError: null,
+  syncStage: null,
+  syncMessage: null,
+  syncStartedAt: null,
 
   selectedObjectId: null,
   selectedObjectType: null,
@@ -122,22 +146,46 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   history: [],
   historyIndex: -1,
 
+  selectionHistory: [[]],
+  selectionHistoryIndex: 0,
+
   viewport: { showAxes: true, showGrid: true, background: 'slate' },
 
-  setSceneGraph: (graph) =>
+  setSceneGraph: (graph) => {
+    const projectId = deriveProjectId(graph);
+    const persisted = loadProjectState(projectId);
+    const baseSelections = persisted
+      ? (persisted.selections as Selection[])
+      : [];
     set({
       sceneGraph: graph,
       history: [graph],
       historyIndex: 0,
       selectedObjectId: null,
       selectedObjectType: null,
-      selections: [],
-      activeSelectionId: null,
-    }),
+      selections: baseSelections,
+      activeSelectionId: persisted?.activeSelectionId ?? null,
+      selectionHistory: [baseSelections],
+      selectionHistoryIndex: 0,
+      viewport: persisted
+        ? { ...get().viewport, ...persisted.viewport }
+        : get().viewport,
+      selectionTool: persisted?.selectionTool ?? get().selectionTool,
+      brushRadius: persisted?.brushRadius ?? get().brushRadius,
+    });
+  },
 
   setGlbUrl: (url) => set({ glbUrl: url }),
   bumpGlbVersion: () => set((s) => ({ glbVersion: s.glbVersion + 1 })),
-  setSyncStatus: (status, error = null) => set({ syncStatus: status, syncError: error }),
+  setSyncStatus: (status, error = null) =>
+    set((s) => ({
+      syncStatus: status,
+      syncError: error,
+      syncStartedAt: status === 'syncing' ? Date.now() : s.syncStartedAt,
+    })),
+
+  setSyncStage: (stage, message) =>
+    set({ syncStage: stage, syncMessage: message }),
   setMaterialOptions: (opts) => set({ materialOptions: opts }),
   setExportOptions: (includeBase, includeRoof) => set({ includeBase, includeRoof }),
 
@@ -147,7 +195,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setBrushRadius: (radius) => set({ brushRadius: radius }),
   setActiveSelection: (id) => set({ activeSelectionId: id }),
 
-  addSelection: (selection, merge) =>
+  addSelection: (selection, merge) => {
+    get().pushSelectionHistory();
     set((state) => {
       const existing = state.selections.find((s) => s.id === selection.id);
       const baseList = state.selections.filter((s) => s.id !== selection.id);
@@ -165,27 +214,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selections: [...baseList, merged],
         activeSelectionId: selection.id,
       };
-    }),
+    });
+  },
 
-  removeSelection: (id) =>
+  removeSelection: (id) => {
+    get().pushSelectionHistory();
     set((state) => ({
       selections: state.selections.filter((s) => s.id !== id),
       activeSelectionId: state.activeSelectionId === id ? null : state.activeSelectionId,
-    })),
+    }));
+  },
 
-  renameSelection: (id, name) =>
+  renameSelection: (id, name) => {
+    get().pushSelectionHistory();
     set((state) => ({
       selections: state.selections.map((s) => (s.id === id ? { ...s, name } : s)),
-    })),
+    }));
+  },
 
-  updateSelectionMetadata: (id, metadata) =>
+  updateSelectionMetadata: (id, metadata) => {
+    get().pushSelectionHistory();
     set((state) => ({
       selections: state.selections.map((s) =>
         s.id === id ? { ...s, metadata: { ...s.metadata, ...metadata } } : s,
       ),
-    })),
+    }));
+  },
 
-  clearSelections: () => set({ selections: [], activeSelectionId: null }),
+  clearSelections: () => {
+    get().pushSelectionHistory();
+    set({ selections: [], activeSelectionId: null });
+  },
 
   getActiveSelection: () => {
     const { selections, activeSelectionId } = get();
@@ -227,6 +286,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(JSON.parse(JSON.stringify(sceneGraph)));
     set({ history: newHistory, historyIndex: newHistory.length - 1 });
+  },
+
+  pushSelectionHistory: () => {
+    const { selections, selectionHistory, selectionHistoryIndex } = get();
+    const newHistory = selectionHistory.slice(0, selectionHistoryIndex + 1);
+    newHistory.push(JSON.parse(JSON.stringify(selections)));
+    if (newHistory.length > 64) newHistory.shift();
+    set({
+      selectionHistory: newHistory,
+      selectionHistoryIndex: newHistory.length - 1,
+    });
+  },
+
+  undoSelection: () => {
+    const { selectionHistory, selectionHistoryIndex } = get();
+    if (selectionHistoryIndex > 0) {
+      const idx = selectionHistoryIndex - 1;
+      const restored = selectionHistory[idx];
+      set({
+        selections: JSON.parse(JSON.stringify(restored)),
+        selectionHistoryIndex: idx,
+        activeSelectionId: null,
+      });
+    }
+  },
+
+  redoSelection: () => {
+    const { selectionHistory, selectionHistoryIndex } = get();
+    if (selectionHistoryIndex < selectionHistory.length - 1) {
+      const idx = selectionHistoryIndex + 1;
+      const restored = selectionHistory[idx];
+      set({
+        selections: JSON.parse(JSON.stringify(restored)),
+        selectionHistoryIndex: idx,
+        activeSelectionId: null,
+      });
+    }
   },
 
   updateWall: (id, updates) => {
@@ -301,4 +397,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       faceRefs: s.faceRefs.map((f) => ({ ...f, meshRef: { objectName: f.meshRef.objectName } })),
     })),
   })),
+
+  loadProject: (projectId) => {
+    const persisted = loadProjectState(projectId);
+    if (!persisted) return;
+    set((state) => ({
+      viewport: { ...state.viewport, ...persisted.viewport },
+      selectionTool: persisted.selectionTool ?? state.selectionTool,
+      brushRadius: persisted.brushRadius ?? state.brushRadius,
+      selections: persisted.selections.map((s) => ({
+        ...s,
+        meshRefs: s.meshRefs.map((m) => ({ ...m })),
+        faceRefs: s.faceRefs.map((f) => ({ ...f })),
+      })) as Selection[],
+      activeSelectionId: persisted.activeSelectionId,
+      selectionHistory: [persisted.selections as Selection[]],
+      selectionHistoryIndex: 0,
+    }));
+  },
+
+  persistProject: (projectId) => {
+    const { sceneGraph, viewport, selections, activeSelectionId, selectionTool, brushRadius } = get();
+    const id = projectId ?? deriveProjectId(sceneGraph);
+    saveProjectState(id, {
+      viewport,
+      selections,
+      activeSelectionId,
+      selectionTool,
+      brushRadius,
+    });
+  },
+
+  resetSelectionsToPersisted: () => {
+    const { sceneGraph } = get();
+    const id = deriveProjectId(sceneGraph);
+    const persisted = loadProjectState(id);
+    if (!persisted) return;
+    set({
+      selections: persisted.selections as Selection[],
+      activeSelectionId: persisted.activeSelectionId,
+    });
+  },
 }));
