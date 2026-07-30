@@ -151,17 +151,23 @@ export function openDesignStream(
   };
 }
 
-export async function launchBlenderMcp(blendPath?: string): Promise<{ status: string; pid?: number }> {
+export async function launchBlenderMcp(
+  blendPath?: string,
+): Promise<{ status: string; pid?: number; log?: string; detail?: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/mcp/launch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(blendPath ? { blend_path: blendPath } : {}),
     });
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({ detail: response.statusText }));
+      return { status: 'error', detail: errBody.detail || response.statusText };
+    }
     return await response.json();
   } catch (error) {
     console.error('API Error (launchBlenderMcp):', error);
-    return { status: 'error' };
+    return { status: 'error', detail: String(error) };
   }
 }
 
@@ -172,5 +178,29 @@ export async function getBlenderMcpStatus(): Promise<{ available: boolean; info?
   } catch (error) {
     console.error('API Error (getBlenderMcpStatus):', error);
     return { available: false };
+  }
+}
+
+export async function getBlenderMcpLog(): Promise<string> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/mcp/log?limit=4000`);
+    const data = await response.json();
+    return data.log || '';
+  } catch {
+    return '';
+  }
+}
+
+export async function getBlenderMcpInfo(): Promise<{
+  blender_executable: string | null;
+  blender_on_path: boolean;
+  addon_module: string;
+  socket_port: number;
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/mcp/info`);
+    return await response.json();
+  } catch {
+    return { blender_executable: null, blender_on_path: false, addon_module: 'floorplan_mcp_addon', socket_port: 9876 };
   }
 }

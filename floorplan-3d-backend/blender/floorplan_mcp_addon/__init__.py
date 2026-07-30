@@ -1,62 +1,40 @@
-# Blender MCP addon (server).
-#
-# Install this addon into Blender (Edit > Preferences > Add-ons > Install
-# from Disk… pick `blender_mcp_addon.py`). Enable it, then start the socket
-# server from the 3D View > Sidebar (N) > "MCP" tab.
-#
-# Once running, the `mcp_client.py` backend can send granular commands
-# without having to regenerate and re-run the entire bpy script on each
-# material edit.
-#
-# Wire protocol: newline-delimited JSON. Each command is a single object;
-# the response is a single object terminated by a newline.
+"""Floorplan 3D MCP Addon — Blender server for live design edits.
+
+Install once: open Blender → Edit > Preferences → Add-ons → Install from Disk
+→ pick this directory's parent folder or this `__init__.py`.
+After enabling, press N in the 3D View → MCP tab → "Start server".
+
+The backend (Python `mcp_client.py`) connects to this socket on
+``localhost:9876`` and sends newline-delimited JSON commands.
+"""
 
 bl_info = {
     "name": "Floorplan 3D MCP Server",
     "author": "Floorplan 3D",
-    "version": (1, 0, 0),
+    "version": (2, 0, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > MCP",
-    "description": "Live MCP server for Floorplan 3D editor (assign material, export GLB).",
+    "description": "Live MCP server for Floorplan 3D editor (assign material, geometry ops, export GLB).",
     "category": "Development",
 }
 
 import json
 import socket
 import threading
+import time
 
 import bpy
 
+from . import geometry_handlers  # noqa: F401  (re-exported via package import)
+
+
 HOST = "localhost"
 PORTS = (9876, 9999)
+MODULE = "floorplan_mcp_addon"
 
 
 def _send(sock: socket.socket, payload: dict) -> None:
     sock.sendall((json.dumps(payload) + "\n").encode())
-
-
-def _handle_command(cmd: dict) -> dict:
-    kind = cmd.get("type")
-    if kind == "ping":
-        return {"pong": True}
-    if kind == "assign_region_material":
-        return _assign_region_material(cmd)
-    if kind == "set_object_color":
-        return _set_object_color(cmd)
-    if kind == "set_object_pattern":
-        return _set_object_pattern(cmd)
-    if kind == "export_glb":
-        return _export_glb(cmd)
-    if kind == "execute_code":
-        return _execute_code(cmd)
-    if kind == "tool_dispatch":
-        # Generic dispatch through geometry_handlers.py / patterns / etc.
-        try:
-            from . import geometry_handlers as _gh
-        except ImportError:  # in-tree addons use absolute import
-            import geometry_handlers as _gh  # type: ignore
-        return _gh.dispatch(cmd.get("tool", ""), cmd)
-    return {"error": f"unknown command type: {kind!r}"}
 
 
 def _assign_region_material(cmd: dict) -> dict:
@@ -73,7 +51,6 @@ def _assign_region_material(cmd: dict) -> dict:
             continue
         if obj.type != "MESH" or not obj.data:
             continue
-        # Ensure material slot exists.
         slot = -1
         for i, m in enumerate(obj.data.materials):
             if m is mat:
@@ -226,103 +203,185 @@ def _execute_code(cmd: dict) -> dict:
     return {"ok": True}
 
 
-class FloorplanMCP_OT_Start(bpy.types.Operator):
-    bl_idname = "floorplan_mcp.start"
+def _handle_command(cmd: dict) -> dict:
+    kind = cmd.get("type")
+    if kind == "ping":
+        return {"pong": True, "ts": time.time()}
+    if kind == "assign_region_material":
+        return _assign_region_material(cmd)
+    if kind == "set_object_color":
+        return _set_object_color(cmd)
+    if kind == "set_object_pattern":
+        return _set_object_pattern(cmd)
+    if kind == "export_glb":
+        return _export_glb(cmd)
+    if kind == "execute_code":
+        return _execute_code(cmd)
+    if kind == "tool_dispatch":
+        return geometry_handlers.dispatch(cmd.get("tool", ""), cmd)
+    return {"error": f"unknown command type: {kind!r}"}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Socket server
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class _Server:
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._socket: socket.socket | None = None
+        self.last_clients: int = 0
+
+    def start(self) -> bool:
+        if self._thread and self._thread.is_alive():
+            return False
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._serve, args=(self._stop,), daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            if self._socket:
+                self._socket.close()
+        except Exception:
+            pass
+
+    def _serve(self, stop_event: threading.Event) -> None:
+        for port in PORTS:
+            try:
+                server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((HOST, port))
+                server.listen(5)
+                server.settimeout(0.5)
+                self._socket = server
+                print(f"[Floorplan MCP] listening on {HOST}:{port}")
+                break
+            except OSError as exc:
+                print(f"[Floorplan MCP] port {port} unavailable: {exc}")
+                continue
+        else:
+            print("[Floorplan MCP] no port available — server not started")
+            return
+
+        while not stop_event.is_set():
+            try:
+                conn, _ = server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+
+        try:
+            server.close()
+        except Exception:
+            pass
+
+    def _handle_client(self, conn: socket.socket) -> None:
+        try:
+            conn.settimeout(60)
+            buf = b""
+            while True:
+                chunk = conn.recv(8192)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        cmd = json.loads(line.decode())
+                    except json.JSONDecodeError:
+                        _send(conn, {"error": "invalid JSON"})
+                        continue
+                    response = _handle_command(cmd)
+                    _send(conn, response)
+        except OSError:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+SERVER = _Server()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Operators + Panel
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class FLOORPLAN_OT_mcp_start(bpy.types.Operator):
+    bl_idname = "floorplan.start_mcp"
     bl_label = "Start MCP server"
     bl_description = "Listen on localhost:9876 for Floorplan 3D MCP commands"
 
-    _thread: threading.Thread | None = None
-    _stop = threading.Event()
-
     def execute(self, context):
-        if FloorplanMCP_OT_Start._thread and FloorplanMCP_OT_Start._thread.is_alive():
-            self.report({"WARNING"}, "MCP server already running")
-            return {"CANCELLED"}
-        FloorplanMCP_OT_Start._stop.clear()
-        FloorplanMCP_OT_Start._thread = threading.Thread(
-            target=_serve, args=(FloorplanMCP_OT_Start._stop,), daemon=True
-        )
-        FloorplanMCP_OT_Start._thread.start()
-        self.report({"INFO"}, f"Floorplan MCP server listening on {HOST}:{PORTS[0]}")
+        ok = SERVER.start()
+        if ok:
+            self.report({"INFO"}, "Floorplan MCP server started")
+        else:
+            self.report({"WARNING"}, "Server already running")
         return {"FINISHED"}
 
 
-class FloorplanMCP_OT_Stop(bpy.types.Operator):
-    bl_idname = "floorplan_mcp.stop"
+class FLOORPLAN_OT_mcp_stop(bpy.types.Operator):
+    bl_idname = "floorplan.stop_mcp"
     bl_label = "Stop MCP server"
 
     def execute(self, context):
-        FloorplanMCP_OT_Start._stop.set()
+        SERVER.stop()
         self.report({"INFO"}, "Floorplan MCP server stopping")
         return {"FINISHED"}
 
 
-class FloorplanMCP_PT_Panel(bpy.types.Panel):
+class FLOORPLAN_PT_mcp(bpy.types.Panel):
     bl_label = "Floorplan 3D MCP"
-    bl_idname = "FLOORPLAN_MCP_PT_panel"
+    bl_idname = "FLOORPLAN_PT_mcp"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "MCP"
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.operator(FloorplanMCP_OT_Start.bl_idname, text="Start server")
-        col.operator(FloorplanMCP_OT_Stop.bl_idname, text="Stop server")
-
-
-def _serve(stop_event: threading.Event) -> None:
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((HOST, PORTS[0]))
-    server.listen(5)
-    server.settimeout(0.5)
-    while not stop_event.is_set():
-        try:
-            conn, _ = server.accept()
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
-    server.close()
-
-
-def _handle_client(conn: socket.socket) -> None:
-    try:
-        conn.settimeout(30)
-        buf = b""
-        while True:
-            chunk = conn.recv(8192)
-            if not chunk:
-                break
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                try:
-                    cmd = json.loads(line.decode())
-                except json.JSONDecodeError:
-                    _send(conn, {"error": "invalid JSON"})
-                    continue
-                response = _handle_command(cmd)
-                _send(conn, response)
-    except OSError:
-        pass
-    finally:
-        conn.close()
+        col.operator(FLOORPLAN_OT_mcp_start.bl_idname, text="Start server")
+        col.operator(FLOORPLAN_OT_mcp_stop.bl_idname, text="Stop server")
+        col.separator()
+        col.label(text=f"Module: {MODULE}")
+        col.label(text="Port: 9876 (default)")
 
 
 _CLASSES = (
-    FloorplanMCP_OT_Start,
-    FloorplanMCP_OT_Stop,
-    FloorplanMCP_PT_Panel,
+    FLOORPLAN_OT_mcp_start,
+    FLOORPLAN_OT_mcp_stop,
+    FLOORPLAN_PT_mcp,
 )
 
 
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    print(f"[Floorplan MCP] registered (module={MODULE})")
 
 
 def unregister():
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+    SERVER.stop()
+
+
+if __name__ == "__main__":
+    register()
+    SERVER.start()
+    print("[Floorplan MCP] standalone run; press Ctrl-C to exit")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        SERVER.stop()

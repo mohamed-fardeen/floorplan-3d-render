@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
 import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
-import { applyDesignActions, openDesignStream } from '../../api/client';
+import { applyDesignActions, exportBlender, openDesignStream } from '../../api/client';
 import { MetricsPanel } from './MetricsPanel';
 import { AIEditPanel } from './AIEditPanel';
 import { CollapsibleSection } from '../ui/CollapsibleSection';
@@ -79,31 +79,58 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
     const plan = { selection: selection.id, operations };
     applyDesignPlanLocally(plan);
 
+    const collectGlb = async (paths: string[] | undefined) => {
+      const glbPath = (paths || []).find((p) => p.endsWith('.glb'));
+      if (!glbPath) return false;
+      const filename = glbPath.split('\\').pop()?.split('/').pop();
+      setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
+      bumpGlbVersion();
+      return true;
+    };
+
     try {
-      const result = await applyDesignActions({
-        scene_graph: sceneGraph,
-        selection: {
-          ...selection,
-          metadata: (selection.metadata ?? {}) as never,
-        },
-        operations,
-        material_options: useEditorStore.getState().materialOptions,
-        include_base: includeBase,
-        include_roof: includeRoof,
-      });
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 120_000);
+      let result: Awaited<ReturnType<typeof applyDesignActions>>;
+      try {
+        result = await applyDesignActions({
+          scene_graph: sceneGraph,
+          selection: {
+            ...selection,
+            metadata: (selection.metadata ?? {}) as never,
+          },
+          operations,
+          material_options: useEditorStore.getState().materialOptions,
+          include_base: includeBase,
+          include_roof: includeRoof,
+        });
+      } finally {
+        window.clearTimeout(timer);
+      }
 
       if (result.status !== 'success') {
         throw new Error(result.detail || 'Sync failed');
       }
 
-      const paths: string[] = result.export_paths || [];
-      const glbPath = paths.find((p) => p.endsWith('.glb'));
-      if (glbPath) {
-        const filename = glbPath.split('\\').pop()?.split('/').pop();
-        setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
-        bumpGlbVersion();
+      let gotGlb = await collectGlb(result.export_paths);
+
+      // Fallback: if design/apply didn't return a GLB (e.g. the backend
+      // couldn't find Blender), run the full export pipeline so the
+      // browser at least hot-reloads.
+      if (!gotGlb) {
+        const fallback = await exportBlender(
+          sceneGraph,
+          includeBase,
+          includeRoof,
+          useEditorStore.getState().materialOptions,
+          false,
+        );
+        if (fallback.status === 'success') {
+          gotGlb = await collectGlb(fallback.export_paths);
+        }
       }
-      setSyncStatus('synced');
+
+      setSyncStatus(gotGlb ? 'synced' : 'error', gotGlb ? undefined : 'No GLB produced');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);

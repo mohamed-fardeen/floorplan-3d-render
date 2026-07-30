@@ -289,30 +289,14 @@ async def apply_design_actions(req: DesignApplyRequest):
     if is_blender_mcp_available():
         use_live_mcp = True
         emit("mcp", "Live MCP detected — applying granular ops")
-        # Build per-object material assignments for each region override.
-        for idx, override in enumerate(translated["region_overrides"]):
-            mat_name = f"RegionMaterial_{idx}"
-            faces_by_object: Dict[str, List[int]] = {}
-            for fr in override.get("face_refs", []) or []:
-                obj_name = fr.get("objectName") if isinstance(fr, dict) else None
-                fi = fr.get("faceIndex") if isinstance(fr, dict) else None
-                if not obj_name or fi is None:
-                    continue
-                faces_by_object.setdefault(obj_name, []).append(int(fi))
-            ok, payload = assign_region_material(
-                override.get("object_names", []) or [],
-                faces_by_object,
-                mat_name,
-            )
-            if not ok:
-                warnings.append(f"[WARN] MCP assign failed for {mat_name}: {payload}")
-        # Material must exist on the Blender side. Emit only the material
-        # Python (no scene rebuild, no export) and ship it via MCP.
+        # Material must exist on the Blender side BEFORE we assign it to a
+        # face, otherwise the addon's assign_region_material returns
+        # "material not found". Ship the material code first, then bind.
         from blender.builders import build_materials
+        from blender.mcp_client import send_command
         import tempfile as _tf
         import os as _os
 
-        script_path = _os.path.join(_tf.gettempdir(), "floorplan3d_mcp_apply.py")
         output_dir = _os.path.abspath("output")
         _os.makedirs(output_dir, exist_ok=True)
         try:
@@ -325,23 +309,40 @@ async def apply_design_actions(req: DesignApplyRequest):
                     "export": {"output_dir": output_dir, "formats": []},
                 },
             )
-            with open(script_path, "w", encoding="utf-8") as fh:
-                fh.write(mat_code)
         except Exception as exc:
-            warnings.append(f"[WARN] live material build failed: {exc}")
+            warnings.append(f"[WARN] material code build failed: {exc}")
         else:
-            with open(script_path, "r", encoding="utf-8") as fh:
-                code = fh.read()
-            from blender.mcp_client import send_command
-            ok, payload = send_command({"type": "execute_code", "code": code})
+            # execute_code must NOT reset the scene — build_materials only
+            # emits material definitions + assignments. Run it.
+            ok, payload = send_command({"type": "execute_code", "code": mat_code})
             if not ok:
                 warnings.append(f"[WARN] MCP execute_code failed: {payload}")
-        # Export the current scene to GLB via MCP.
+            else:
+                # Now bind each region's material to its face set.
+                for idx, override in enumerate(translated["region_overrides"]):
+                    mat_name = f"RegionMaterial_{idx}"
+                    faces_by_object: Dict[str, List[int]] = {}
+                    for fr in override.get("face_refs", []) or []:
+                        obj_name = fr.get("objectName") if isinstance(fr, dict) else None
+                        fi = fr.get("faceIndex") if isinstance(fr, dict) else None
+                        if not obj_name or fi is None:
+                            continue
+                        faces_by_object.setdefault(obj_name, []).append(int(fi))
+                    ok, payload = assign_region_material(
+                        override.get("object_names", []) or [],
+                        faces_by_object,
+                        mat_name,
+                    )
+                    if not ok:
+                        warnings.append(f"[WARN] MCP assign failed for {mat_name}: {payload}")
+        # Always export after material edits so the browser hot-reloads.
         project = (req.scene_graph.metadata.project_name or "building").replace(" ", "_")
         glb_path = _os.path.join(output_dir, f"{project}.glb")
         ok, payload = export_glb(glb_path)
         if ok and isinstance(payload, dict) and payload.get("path"):
             export_paths = [payload["path"]]
+        else:
+            warnings.append(f"[WARN] MCP export_glb failed: {payload}")
 
     if not use_live_mcp or not export_paths:
         state = PipelineState(
@@ -395,11 +396,21 @@ async def design_stream():
 @app.post("/api/mcp/launch")
 async def launch_mcp(blend_path: Optional[str] = None):
     """Spawn a Blender subprocess with the MCP addon loaded."""
-    from blender.mcp_launcher import launch_blender_with_mcp
+    from blender.mcp_launcher import launch_blender_with_mcp, tail_log
     proc = launch_blender_with_mcp(blend_path)
     if proc is None:
-        raise HTTPException(status_code=503, detail="Blender executable not found")
-    return {"status": "started", "pid": proc.pid}
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Blender executable not found. Install Blender 4.0+ and make sure "
+                "it is on PATH, or place it under C:\\Program Files\\Blender Foundation\\."
+            ),
+        )
+    return {
+        "status": "started",
+        "pid": proc.pid,
+        "log": tail_log(),
+    }
 
 
 @app.get("/api/mcp/status")
@@ -408,6 +419,26 @@ async def mcp_status():
     available = is_blender_mcp_available()
     info = ping() if available else None
     return {"available": available, "info": info}
+
+
+@app.get("/api/mcp/log")
+async def mcp_log(limit: int = 4000):
+    from blender.mcp_launcher import tail_log
+    return {"log": tail_log(limit=limit)}
+
+
+@app.get("/api/mcp/info")
+async def mcp_info():
+    """Return paths + addon module name so the browser can show install hints."""
+    import shutil as _shutil
+    from blender.mcp_launcher import _find_blender_executable
+    exe = _find_blender_executable()
+    return {
+        "blender_executable": exe,
+        "blender_on_path": bool(_shutil.which("blender")),
+        "addon_module": "floorplan_mcp_addon",
+        "socket_port": 9876,
+    }
 
 
 @app.post("/api/agent/chat")

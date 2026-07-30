@@ -3,6 +3,8 @@ import { useEditorStore } from '../../store/editorStore';
 import {
   validateGraph,
   exportBlender,
+  getBlenderMcpInfo,
+  getBlenderMcpLog,
   getBlenderMcpStatus,
   launchBlenderMcp,
 } from '../../api/client';
@@ -45,22 +47,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
   const [mcpAvailable, setMcpAvailable] = useState(false);
   const [launchingMcp, setLaunchingMcp] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
+  const [mcpLog, setMcpLog] = useState<string>('');
+  const [blenderPath, setBlenderPath] = useState<string | null>(null);
+  const [showLog, setShowLog] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
       try {
-        const status = await getBlenderMcpStatus();
-        if (!cancelled) {
-          setMcpAvailable(status.available);
-          if (status.available) setMcpError(null);
-        }
+        const [status, info, log] = await Promise.all([
+          getBlenderMcpStatus(),
+          getBlenderMcpInfo(),
+          getBlenderMcpLog(),
+        ]);
+        if (cancelled) return;
+        setMcpAvailable(status.available);
+        setBlenderPath(info.blender_executable);
+        setMcpLog(log);
       } catch {
         if (!cancelled) setMcpAvailable(false);
       }
     };
     probe();
-    const handle = window.setInterval(probe, 4000);
+    const handle = window.setInterval(probe, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
@@ -73,18 +82,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
     try {
       const res = await launchBlenderMcp();
       if (res.status === 'error') {
-        setMcpError('Blender executable not found on PATH or in standard install locations.');
+        setMcpError(res.detail || 'Unknown launch error');
       } else {
-        // Give Blender a moment to start the socket server.
-        window.setTimeout(async () => {
-          try {
-            const status = await getBlenderMcpStatus();
-            setMcpAvailable(status.available);
-            if (!status.available) setMcpError('Blender started but MCP addon did not respond.');
-          } catch {
-            /* ignore */
+        // Poll for up to 8 s waiting for the socket to come up.
+        const startedAt = Date.now();
+        const wait = async () => {
+          const status = await getBlenderMcpStatus();
+          setMcpAvailable(status.available);
+          if (status.available) {
+            const log = await getBlenderMcpLog();
+            setMcpLog(log);
+            return;
           }
-        }, 2500);
+          if (Date.now() - startedAt < 8000) {
+            window.setTimeout(wait, 600);
+          } else {
+            const log = await getBlenderMcpLog();
+            setMcpLog(log);
+            setMcpError('Blender started but MCP socket did not respond on :9876.');
+          }
+        };
+        wait();
       }
     } catch (err) {
       setMcpError(err instanceof Error ? err.message : String(err));
@@ -256,29 +274,50 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
               {mcpAvailable ? 'connected' : 'offline'}
             </span>
           </div>
+          <p className="mt-1 truncate text-[10px] text-gray-500" title={blenderPath ?? ''}>
+            {blenderPath ? `Blender: ${blenderPath}` : 'Blender executable not detected'}
+          </p>
           {!mcpAvailable && (
             <>
               <button
                 type="button"
                 onClick={handleLaunchMcp}
-                disabled={launchingMcp}
+                disabled={launchingMcp || !blenderPath}
                 className="mt-2 w-full rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
               >
                 {launchingMcp ? 'Launching Blender…' : 'Launch Blender with MCP'}
               </button>
-              <p className="mt-2 text-[10px] leading-snug text-gray-500">
-                Start Blender with the Floorplan MCP addon loaded so the agent commands
-                can run live. Without Blender running, the browser only re-renders the
-                GLB the backend generated headlessly.
-              </p>
+              {!blenderPath && (
+                <p className="mt-2 text-[10px] text-red-600">
+                  Blender executable not found on PATH or under C:\Program Files\Blender Foundation.
+                  Install Blender 4.0+ and restart the backend.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowLog((v) => !v)}
+                className="mt-1 text-[10px] text-gray-500 hover:text-gray-700"
+              >
+                {showLog ? 'Hide' : 'Show'} launch log
+              </button>
+              {showLog && (
+                <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-white p-1.5 font-mono text-[9px] text-gray-700">
+                  {mcpLog || '(no log yet)'}
+                </pre>
+              )}
               {mcpError && (
                 <p className="mt-1 text-[10px] text-red-600">{mcpError}</p>
               )}
+              <p className="mt-2 text-[10px] leading-snug text-gray-500">
+                If the button is greyed out, install Blender 4.0+. Otherwise the
+                backend launches Blender with the addon preloaded and the socket
+                listens on <code className="rounded bg-gray-200 px-1">:9876</code>.
+              </p>
             </>
           )}
           {mcpAvailable && (
             <p className="mt-2 text-[10px] leading-snug text-emerald-700">
-              Blender MCP socket is reachable. Region edits will dispatch live.
+              Blender MCP socket is reachable. Region edits dispatch live.
             </p>
           )}
         </div>

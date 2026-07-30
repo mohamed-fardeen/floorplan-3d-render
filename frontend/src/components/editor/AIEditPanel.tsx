@@ -11,7 +11,7 @@ import type {
   AgentChatRequest,
 } from '../../api/agent';
 import { fetchLlmProviders } from '../../api/llm';
-import { applyDesignActions } from '../../api/client';
+import { applyDesignActions, exportBlender } from '../../api/client';
 
 interface ChatTurn {
   role: 'user' | 'agent';
@@ -180,13 +180,25 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
           include_roof: includeRoof,
         });
         const paths: string[] = apply.export_paths || [];
-        const glb = paths.find((p) => p.endsWith('.glb'));
+        let glb = paths.find((p) => p.endsWith('.glb'));
+        if (!glb) {
+          // Fallback: re-run the full export pipeline if design/apply
+          // couldn't produce a GLB.
+          const fb = await exportBlender(
+            sceneGraph,
+            includeBase,
+            includeRoof,
+            useEditorStore.getState().materialOptions,
+            false,
+          );
+          glb = (fb.export_paths || []).find((p: string) => p.endsWith('.glb'));
+        }
         if (glb) {
           const filename = glb.split('\\').pop()?.split('/').pop();
           setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
           bumpGlbVersion();
         }
-        setSyncStatus(apply.status === 'success' ? 'synced' : 'error', apply.detail);
+        setSyncStatus(apply.status === 'success' && glb ? 'synced' : 'error', apply.detail);
         setSyncStage(null, null);
       } else {
         setSyncStatus('idle');
