@@ -50,8 +50,13 @@ export type SelectionTool = 'click' | 'brush' | 'box' | 'lasso';
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 
+export type ViewportInteractionMode = 'select' | 'orbit';
+
 export interface ViewportOptions {
   showAxes: boolean;
   showGrid: boolean;
+  showPatterns: boolean;
+  showDoorsAndWindows: boolean;
   background: 'slate' | 'white' | 'night';
+  interactionMode: ViewportInteractionMode;
 }

@@ -28,28 +28,28 @@ bpy.context.view_layer.active_layer_collection = \
 
 # ── Floor Slabs & Base ──────────────────────────────────────────
 # Room: room
-verts_room_2573b462 = [(5.2845, 2.2815, 0.0), (5.304, 1.248, 0.0), (7.683, 1.287, 0.0), (7.644, 2.301, 0.0)]
-faces_room_2573b462 = [list(range(len(verts_room_2573b462)))]
-mesh_room_2573b462 = bpy.data.meshes.new('floor_room_2573b462')
-mesh_room_2573b462.from_pydata(verts_room_2573b462, [], faces_room_2573b462)
-mesh_room_2573b462.update()
-obj_room_2573b462 = bpy.data.objects.new('Floor_room', mesh_room_2573b462)
-bpy.context.collection.objects.link(obj_room_2573b462)
-mod_room_2573b462 = obj_room_2573b462.modifiers.new('Solidify', 'SOLIDIFY')
-mod_room_2573b462.thickness = 0.2
-mod_room_2573b462.offset = -1.0
+verts_room_cdfdbd81 = [(5.2845, 2.2815, 0.0), (5.304, 1.248, 0.0), (7.683, 1.287, 0.0), (7.644, 2.301, 0.0)]
+faces_room_cdfdbd81 = [list(range(len(verts_room_cdfdbd81)))]
+mesh_room_cdfdbd81 = bpy.data.meshes.new('floor_room_cdfdbd81')
+mesh_room_cdfdbd81.from_pydata(verts_room_cdfdbd81, [], faces_room_cdfdbd81)
+mesh_room_cdfdbd81.update()
+obj_room_cdfdbd81 = bpy.data.objects.new('Floor_room', mesh_room_cdfdbd81)
+bpy.context.collection.objects.link(obj_room_cdfdbd81)
+mod_room_cdfdbd81 = obj_room_cdfdbd81.modifiers.new('Solidify', 'SOLIDIFY')
+mod_room_cdfdbd81.thickness = 0.2
+mod_room_cdfdbd81.offset = -1.0
 
 # Room: room
-verts_room_8fcc41c8 = [(0.9945, 8.0145, 0.0), (0.9945, 6.357, 0.0), (2.028, 6.3375, 0.0), (2.0085, 6.1035, 0.0), (0.975, 6.1425, 0.0), (1.014, 2.4765, 0.0), (3.5685, 2.4765, 0.0), (3.627, 2.7885, 0.0), (3.7635, 2.769, 0.0), (3.783, 2.535, 0.0), (7.6635, 2.4765, 0.0), (7.6635, 9.1455, 0.0), (3.4515, 9.165, 0.0), (3.315, 7.9755, 0.0)]
-faces_room_8fcc41c8 = [list(range(len(verts_room_8fcc41c8)))]
-mesh_room_8fcc41c8 = bpy.data.meshes.new('floor_room_8fcc41c8')
-mesh_room_8fcc41c8.from_pydata(verts_room_8fcc41c8, [], faces_room_8fcc41c8)
-mesh_room_8fcc41c8.update()
-obj_room_8fcc41c8 = bpy.data.objects.new('Floor_room', mesh_room_8fcc41c8)
-bpy.context.collection.objects.link(obj_room_8fcc41c8)
-mod_room_8fcc41c8 = obj_room_8fcc41c8.modifiers.new('Solidify', 'SOLIDIFY')
-mod_room_8fcc41c8.thickness = 0.2
-mod_room_8fcc41c8.offset = -1.0
+verts_room_e5379a02 = [(0.9945, 8.0145, 0.0), (0.9945, 6.357, 0.0), (2.028, 6.3375, 0.0), (2.0085, 6.1035, 0.0), (0.975, 6.1425, 0.0), (1.014, 2.4765, 0.0), (3.5685, 2.4765, 0.0), (3.627, 2.7885, 0.0), (3.7635, 2.769, 0.0), (3.783, 2.535, 0.0), (7.6635, 2.4765, 0.0), (7.6635, 9.1455, 0.0), (3.4515, 9.165, 0.0), (3.315, 7.9755, 0.0)]
+faces_room_e5379a02 = [list(range(len(verts_room_e5379a02)))]
+mesh_room_e5379a02 = bpy.data.meshes.new('floor_room_e5379a02')
+mesh_room_e5379a02.from_pydata(verts_room_e5379a02, [], faces_room_e5379a02)
+mesh_room_e5379a02.update()
+obj_room_e5379a02 = bpy.data.objects.new('Floor_room', mesh_room_e5379a02)
+bpy.context.collection.objects.link(obj_room_e5379a02)
+mod_room_e5379a02 = obj_room_e5379a02.modifiers.new('Solidify', 'SOLIDIFY')
+mod_room_e5379a02.thickness = 0.2
+mod_room_e5379a02.offset = -1.0
 
 # Generic Base Plate
 base_verts = [(-1.1225, -0.8494999999999999, -0.2), (9.761, -0.8494999999999999, -0.2), (9.761, 11.282, -0.2), (-1.1225, 11.282, -0.2)]
@@ -65,147 +65,147 @@ base_mod.offset = -1.0
 
 
 # ── Walls ───────────────────────────────────────────────
-# Wall: wall_joined_9c0ece73  (length=6.786m, thickness=0.195m)
+# Wall: wall_joined_75c522b0  (length=6.786m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(4.309531654509479, 2.379, 1.5)
 )
-wall_obj_wall_joined_9c0ece73 = bpy.context.active_object
-wall_obj_wall_joined_9c0ece73.name = 'Wall_wall_joined_9c0ece73'
-wall_obj_wall_joined_9c0ece73.scale = (6.786063309018959, 0.195, 3.0)
-wall_obj_wall_joined_9c0ece73.rotation_euler[2] = 0.0
+wall_obj_wall_joined_75c522b0 = bpy.context.active_object
+wall_obj_wall_joined_75c522b0.name = 'Wall_wall_joined_75c522b0'
+wall_obj_wall_joined_75c522b0.scale = (6.786063309018959, 0.195, 3.0)
+wall_obj_wall_joined_75c522b0.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_8d273119  (length=7.819m, thickness=0.195m)
+# Wall: wall_joined_b4dcf324  (length=7.819m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(7.761, 5.157749999999999, 1.5)
 )
-wall_obj_wall_joined_8d273119 = bpy.context.active_object
-wall_obj_wall_joined_8d273119.name = 'Wall_wall_joined_8d273119'
-wall_obj_wall_joined_8d273119.scale = (7.8195, 0.195, 3.0)
-wall_obj_wall_joined_8d273119.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_b4dcf324 = bpy.context.active_object
+wall_obj_wall_joined_b4dcf324.name = 'Wall_wall_joined_b4dcf324'
+wall_obj_wall_joined_b4dcf324.scale = (7.8195, 0.195, 3.0)
+wall_obj_wall_joined_b4dcf324.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_2bf67e03  (length=5.284m, thickness=0.195m)
+# Wall: wall_joined_b5cd8382  (length=5.284m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(0.8775, 5.27475, 1.5)
 )
-wall_obj_wall_joined_2bf67e03 = bpy.context.active_object
-wall_obj_wall_joined_2bf67e03.name = 'Wall_wall_joined_2bf67e03'
-wall_obj_wall_joined_2bf67e03.scale = (5.2844999999999995, 0.195, 3.0)
-wall_obj_wall_joined_2bf67e03.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_b5cd8382 = bpy.context.active_object
+wall_obj_wall_joined_b5cd8382.name = 'Wall_wall_joined_b5cd8382'
+wall_obj_wall_joined_b5cd8382.scale = (5.2844999999999995, 0.195, 3.0)
+wall_obj_wall_joined_b5cd8382.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_b0ecc028  (length=4.446m, thickness=0.195m)
+# Wall: wall_joined_e18128bf  (length=4.446m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(5.518474610063728, 9.2625, 1.5)
 )
-wall_obj_wall_joined_b0ecc028 = bpy.context.active_object
-wall_obj_wall_joined_b0ecc028.name = 'Wall_wall_joined_b0ecc028'
-wall_obj_wall_joined_b0ecc028.scale = (4.446050779872545, 0.195, 3.0)
-wall_obj_wall_joined_b0ecc028.rotation_euler[2] = 0.0
+wall_obj_wall_joined_e18128bf = bpy.context.active_object
+wall_obj_wall_joined_e18128bf.name = 'Wall_wall_joined_e18128bf'
+wall_obj_wall_joined_e18128bf.scale = (4.446050779872545, 0.195, 3.0)
+wall_obj_wall_joined_e18128bf.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_6dd82416  (length=3.335m, thickness=0.195m)
+# Wall: wall_joined_a7c0811b  (length=3.335m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(3.6855, 4.10475, 1.5)
 )
-wall_obj_wall_joined_6dd82416 = bpy.context.active_object
-wall_obj_wall_joined_6dd82416.name = 'Wall_wall_joined_6dd82416'
-wall_obj_wall_joined_6dd82416.scale = (3.3345000000000002, 0.195, 3.0)
-wall_obj_wall_joined_6dd82416.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_a7c0811b = bpy.context.active_object
+wall_obj_wall_joined_a7c0811b.name = 'Wall_wall_joined_a7c0811b'
+wall_obj_wall_joined_a7c0811b.scale = (3.3345000000000002, 0.195, 3.0)
+wall_obj_wall_joined_a7c0811b.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_7cc24707  (length=2.321m, thickness=0.195m)
+# Wall: wall_97b0739f  (length=2.321m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(2.05725, 8.112, 1.5)
 )
-wall_obj_wall_7cc24707 = bpy.context.active_object
-wall_obj_wall_7cc24707.name = 'Wall_wall_7cc24707'
-wall_obj_wall_7cc24707.scale = (2.3205, 0.195, 3.0)
-wall_obj_wall_7cc24707.rotation_euler[2] = 0.0
+wall_obj_wall_97b0739f = bpy.context.active_object
+wall_obj_wall_97b0739f.name = 'Wall_wall_97b0739f'
+wall_obj_wall_97b0739f.scale = (2.3205, 0.195, 3.0)
+wall_obj_wall_97b0739f.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_df58c83a  (length=2.594m, thickness=0.195m)
+# Wall: wall_joined_6e15b027  (length=2.594m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(6.44475, 1.1505, 1.5)
 )
-wall_obj_wall_joined_df58c83a = bpy.context.active_object
-wall_obj_wall_joined_df58c83a.name = 'Wall_wall_joined_df58c83a'
-wall_obj_wall_joined_df58c83a.scale = (2.5935000000000006, 0.195, 3.0)
-wall_obj_wall_joined_df58c83a.rotation_euler[2] = 0.0
+wall_obj_wall_joined_6e15b027 = bpy.context.active_object
+wall_obj_wall_joined_6e15b027.name = 'Wall_wall_joined_6e15b027'
+wall_obj_wall_joined_6e15b027.scale = (2.5935000000000006, 0.195, 3.0)
+wall_obj_wall_joined_6e15b027.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_7a2f5613  (length=2.496m, thickness=0.195m)
+# Wall: wall_joined_4de3b211  (length=2.496m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(3.276, 8.033999999999999, 1.5)
 )
-wall_obj_wall_joined_7a2f5613 = bpy.context.active_object
-wall_obj_wall_joined_7a2f5613.name = 'Wall_wall_joined_7a2f5613'
-wall_obj_wall_joined_7a2f5613.scale = (2.4960000000000004, 0.195, 3.0)
-wall_obj_wall_joined_7a2f5613.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_4de3b211 = bpy.context.active_object
+wall_obj_wall_joined_4de3b211.name = 'Wall_wall_joined_4de3b211'
+wall_obj_wall_joined_4de3b211.scale = (2.4960000000000004, 0.195, 3.0)
+wall_obj_wall_joined_4de3b211.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_bb5fda25  (length=1.287m, thickness=0.195m)
+# Wall: wall_joined_4cb266ec  (length=1.287m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(2.613, 6.8055, 1.5)
 )
-wall_obj_wall_joined_bb5fda25 = bpy.context.active_object
-wall_obj_wall_joined_bb5fda25.name = 'Wall_wall_joined_bb5fda25'
-wall_obj_wall_joined_bb5fda25.scale = (1.287, 0.195, 3.0)
-wall_obj_wall_joined_bb5fda25.rotation_euler[2] = 0.0
+wall_obj_wall_joined_4cb266ec = bpy.context.active_object
+wall_obj_wall_joined_4cb266ec.name = 'Wall_wall_joined_4cb266ec'
+wall_obj_wall_joined_4cb266ec.scale = (1.287, 0.195, 3.0)
+wall_obj_wall_joined_4cb266ec.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_e6e93cff  (length=1.482m, thickness=0.195m)
+# Wall: wall_joined_e03dd0c1  (length=1.482m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(2.847, 5.7525, 1.5)
 )
-wall_obj_wall_joined_e6e93cff = bpy.context.active_object
-wall_obj_wall_joined_e6e93cff.name = 'Wall_wall_joined_e6e93cff'
-wall_obj_wall_joined_e6e93cff.scale = (1.4820000000000002, 0.195, 3.0)
-wall_obj_wall_joined_e6e93cff.rotation_euler[2] = 0.0
+wall_obj_wall_joined_e03dd0c1 = bpy.context.active_object
+wall_obj_wall_joined_e03dd0c1.name = 'Wall_wall_joined_e03dd0c1'
+wall_obj_wall_joined_e03dd0c1.scale = (1.4820000000000002, 0.195, 3.0)
+wall_obj_wall_joined_e03dd0c1.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_26f2535b  (length=1.170m, thickness=0.195m)
+# Wall: wall_joined_fa13354f  (length=1.170m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(5.187, 1.755, 1.5)
 )
-wall_obj_wall_joined_26f2535b = bpy.context.active_object
-wall_obj_wall_joined_26f2535b.name = 'Wall_wall_joined_26f2535b'
-wall_obj_wall_joined_26f2535b.scale = (1.17, 0.195, 3.0)
-wall_obj_wall_joined_26f2535b.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_fa13354f = bpy.context.active_object
+wall_obj_wall_joined_fa13354f.name = 'Wall_wall_joined_fa13354f'
+wall_obj_wall_joined_fa13354f.scale = (1.17, 0.195, 3.0)
+wall_obj_wall_joined_fa13354f.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_76f0e4bf  (length=0.956m, thickness=0.195m)
+# Wall: wall_0479e524  (length=0.956m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(1.41375, 6.28875, 1.5)
 )
-wall_obj_wall_76f0e4bf = bpy.context.active_object
-wall_obj_wall_76f0e4bf.name = 'Wall_wall_76f0e4bf'
-wall_obj_wall_76f0e4bf.scale = (0.955698958877742, 0.195, 3.0)
-wall_obj_wall_76f0e4bf.rotation_euler[2] = 0.0
+wall_obj_wall_0479e524 = bpy.context.active_object
+wall_obj_wall_0479e524.name = 'Wall_wall_0479e524'
+wall_obj_wall_0479e524.scale = (0.955698958877742, 0.195, 3.0)
+wall_obj_wall_0479e524.rotation_euler[2] = 0.0
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-# Wall: wall_joined_7159799a  (length=1.072m, thickness=0.195m)
+# Wall: wall_joined_4f4252a5  (length=1.072m, thickness=0.195m)
 bpy.ops.mesh.primitive_cube_add(
     size=1,
     location=(1.95, 6.30825, 1.5)
 )
-wall_obj_wall_joined_7159799a = bpy.context.active_object
-wall_obj_wall_joined_7159799a.name = 'Wall_wall_joined_7159799a'
-wall_obj_wall_joined_7159799a.scale = (1.0724999999999998, 0.195, 3.0)
-wall_obj_wall_joined_7159799a.rotation_euler[2] = 1.5707963267948966
+wall_obj_wall_joined_4f4252a5 = bpy.context.active_object
+wall_obj_wall_joined_4f4252a5.name = 'Wall_wall_joined_4f4252a5'
+wall_obj_wall_joined_4f4252a5.scale = (1.0724999999999998, 0.195, 3.0)
+wall_obj_wall_joined_4f4252a5.rotation_euler[2] = 1.5707963267948966
 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
 
@@ -217,7 +217,7 @@ cut_door_1.name = 'Cutter_door_1'
 cut_door_1.scale = (0.9, 0.39, 2.25)
 cut_door_1.rotation_euler[2] = 1.5707963267948966
 cut_door_1.display_type = 'WIRE'
-wall_target_door_1 = bpy.data.objects.get('Wall_wall_joined_26f2535b')
+wall_target_door_1 = bpy.data.objects.get('Wall_wall_joined_fa13354f')
 if wall_target_door_1:
     bool_mod_door_1 = wall_target_door_1.modifiers.new('Cut_door_1', 'BOOLEAN')
     bool_mod_door_1.operation = 'DIFFERENCE'
@@ -231,7 +231,7 @@ cut_door_2.name = 'Cutter_door_2'
 cut_door_2.scale = (0.9, 0.39, 2.25)
 cut_door_2.rotation_euler[2] = 0.0
 cut_door_2.display_type = 'WIRE'
-wall_target_door_2 = bpy.data.objects.get('Wall_wall_joined_9c0ece73')
+wall_target_door_2 = bpy.data.objects.get('Wall_wall_joined_75c522b0')
 if wall_target_door_2:
     bool_mod_door_2 = wall_target_door_2.modifiers.new('Cut_door_2', 'BOOLEAN')
     bool_mod_door_2.operation = 'DIFFERENCE'
@@ -245,7 +245,7 @@ cut_door_3.name = 'Cutter_door_3'
 cut_door_3.scale = (0.9, 0.39, 2.25)
 cut_door_3.rotation_euler[2] = 1.5707963267948966
 cut_door_3.display_type = 'WIRE'
-wall_target_door_3 = bpy.data.objects.get('Wall_wall_joined_8d273119')
+wall_target_door_3 = bpy.data.objects.get('Wall_wall_joined_b4dcf324')
 if wall_target_door_3:
     bool_mod_door_3 = wall_target_door_3.modifiers.new('Cut_door_3', 'BOOLEAN')
     bool_mod_door_3.operation = 'DIFFERENCE'
@@ -259,7 +259,7 @@ cut_door_4.name = 'Cutter_door_4'
 cut_door_4.scale = (0.9, 0.39, 2.25)
 cut_door_4.rotation_euler[2] = 0.0
 cut_door_4.display_type = 'WIRE'
-wall_target_door_4 = bpy.data.objects.get('Wall_wall_joined_e6e93cff')
+wall_target_door_4 = bpy.data.objects.get('Wall_wall_joined_e03dd0c1')
 if wall_target_door_4:
     bool_mod_door_4 = wall_target_door_4.modifiers.new('Cut_door_4', 'BOOLEAN')
     bool_mod_door_4.operation = 'DIFFERENCE'
@@ -273,7 +273,7 @@ cut_door_5.name = 'Cutter_door_5'
 cut_door_5.scale = (0.9, 0.39, 2.25)
 cut_door_5.rotation_euler[2] = 0.0
 cut_door_5.display_type = 'WIRE'
-wall_target_door_5 = bpy.data.objects.get('Wall_wall_joined_bb5fda25')
+wall_target_door_5 = bpy.data.objects.get('Wall_wall_joined_4cb266ec')
 if wall_target_door_5:
     bool_mod_door_5 = wall_target_door_5.modifiers.new('Cut_door_5', 'BOOLEAN')
     bool_mod_door_5.operation = 'DIFFERENCE'
@@ -287,7 +287,7 @@ cut_window_1.name = 'Cutter_window_1'
 cut_window_1.scale = (1.2, 0.39, 1.2000000000000002)
 cut_window_1.rotation_euler[2] = 0.0
 cut_window_1.display_type = 'WIRE'
-wall_target_window_1 = bpy.data.objects.get('Wall_wall_joined_9c0ece73')
+wall_target_window_1 = bpy.data.objects.get('Wall_wall_joined_75c522b0')
 if wall_target_window_1:
     bool_mod_window_1 = wall_target_window_1.modifiers.new('Cut_window_1', 'BOOLEAN')
     bool_mod_window_1.operation = 'DIFFERENCE'
@@ -301,7 +301,7 @@ cut_window_2.name = 'Cutter_window_2'
 cut_window_2.scale = (1.2, 0.39, 1.2000000000000002)
 cut_window_2.rotation_euler[2] = 1.5707963267948966
 cut_window_2.display_type = 'WIRE'
-wall_target_window_2 = bpy.data.objects.get('Wall_wall_joined_8d273119')
+wall_target_window_2 = bpy.data.objects.get('Wall_wall_joined_b4dcf324')
 if wall_target_window_2:
     bool_mod_window_2 = wall_target_window_2.modifiers.new('Cut_window_2', 'BOOLEAN')
     bool_mod_window_2.operation = 'DIFFERENCE'
@@ -315,7 +315,7 @@ cut_window_3.name = 'Cutter_window_3'
 cut_window_3.scale = (1.2, 0.39, 1.2000000000000002)
 cut_window_3.rotation_euler[2] = 1.5707963267948966
 cut_window_3.display_type = 'WIRE'
-wall_target_window_3 = bpy.data.objects.get('Wall_wall_joined_8d273119')
+wall_target_window_3 = bpy.data.objects.get('Wall_wall_joined_b4dcf324')
 if wall_target_window_3:
     bool_mod_window_3 = wall_target_window_3.modifiers.new('Cut_window_3', 'BOOLEAN')
     bool_mod_window_3.operation = 'DIFFERENCE'
@@ -329,7 +329,7 @@ cut_window_4.name = 'Cutter_window_4'
 cut_window_4.scale = (1.2, 0.39, 1.2000000000000002)
 cut_window_4.rotation_euler[2] = 0.0
 cut_window_4.display_type = 'WIRE'
-wall_target_window_4 = bpy.data.objects.get('Wall_wall_joined_b0ecc028')
+wall_target_window_4 = bpy.data.objects.get('Wall_wall_joined_e18128bf')
 if wall_target_window_4:
     bool_mod_window_4 = wall_target_window_4.modifiers.new('Cut_window_4', 'BOOLEAN')
     bool_mod_window_4.operation = 'DIFFERENCE'
@@ -342,7 +342,7 @@ if wall_target_window_4:
 # ── Furniture (Placeholder Cubes) ────────────────────────
 
 # ── Materials ────────────────────────────────────────────
-# Wall pattern: stacked_coils
+# Wall pattern: stacked_coils (WallMaterial)
 if 'WallMaterial' in bpy.data.materials:
     bpy.data.materials.remove(bpy.data.materials['WallMaterial'])
 mat = bpy.data.materials.new(name='WallMaterial')
@@ -387,8 +387,8 @@ wall_bump.inputs['Distance'].default_value = 0.045
 links.new(_ridge_ramp.outputs['Color'], wall_bump.inputs['Height'])
 links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])
 # 2) Apply chosen wall colour
-wall_bsdf.inputs['Base Color'].default_value = (0.20392156862745098, 0.28627450980392155, 0.3686274509803922, 1.0)
-mat.diffuse_color = (0.20392156862745098, 0.28627450980392155, 0.3686274509803922, 1.0)
+wall_bsdf.inputs['Base Color'].default_value = (0.47843137254901963, 0.1607843137254902, 0.08235294117647059, 1.0)
+mat.diffuse_color = (0.47843137254901963, 0.1607843137254902, 0.08235294117647059, 1.0)
 wall_bsdf.inputs['Roughness'].default_value = 0.78
 wall_bsdf.inputs['Metallic'].default_value = 0.0
 
@@ -407,6 +407,165 @@ for obj in bpy.data.objects:
             obj.data.materials.clear()
             obj.data.materials.append(bpy.data.materials['WallMaterial'])
             obj.active_material_index = 0
+
+# Wall pattern: stacked_coils (RegionMaterial_0)
+if 'RegionMaterial_0' in bpy.data.materials:
+    bpy.data.materials.remove(bpy.data.materials['RegionMaterial_0'])
+mat = bpy.data.materials.new(name='RegionMaterial_0')
+mat.use_nodes = True
+_tree = mat.node_tree
+for _n in list(_tree.nodes):
+    _tree.nodes.remove(_n)
+nodes = _tree.nodes
+links = _tree.links
+wall_bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+wall_out = nodes.new('ShaderNodeOutputMaterial')
+links.new(wall_bsdf.outputs['BSDF'], wall_out.inputs['Surface'])
+wall_bsdf.location = (0, 0)
+wall_out.location = (500, 0)
+# 1) Pattern ridges (world-space horizontal bands, same colour via lighting)
+_geo = nodes.new('ShaderNodeNewGeometry')
+_hz_sep = nodes.new('ShaderNodeSeparateXYZ')
+links.new(_geo.outputs['Position'], _hz_sep.inputs['Vector'])
+_hz_scale = nodes.new('ShaderNodeMath')
+_hz_scale.operation = 'MULTIPLY'
+_hz_scale.inputs[1].default_value = 10.0
+links.new(_hz_sep.outputs['Z'], _hz_scale.inputs[0])
+_hz_vec = nodes.new('ShaderNodeCombineXYZ')
+_hz_vec.inputs['X'].default_value = 0.0
+_hz_vec.inputs['Y'].default_value = 0.0
+links.new(_hz_scale.outputs['Value'], _hz_vec.inputs['Z'])
+_hz_wave = nodes.new('ShaderNodeTexWave')
+_hz_wave.wave_type = 'BANDS'
+_hz_wave.bands_direction = 'Z'
+_hz_wave.inputs['Scale'].default_value = 1.0
+_hz_wave.inputs['Distortion'].default_value = 0.0
+_hz_wave.inputs['Detail'].default_value = 0.0
+links.new(_hz_vec.outputs['Vector'], _hz_wave.inputs['Vector'])
+_ridge_ramp = nodes.new('ShaderNodeValToRGB')
+_ridge_ramp.color_ramp.elements[0].position = 0.40
+_ridge_ramp.color_ramp.elements.new(0.60)
+_ridge_ramp.color_ramp.elements[1].position = 0.60
+links.new(_hz_wave.outputs['Fac'], _ridge_ramp.inputs['Fac'])
+wall_bump = nodes.new('ShaderNodeBump')
+wall_bump.inputs['Strength'].default_value = 1.0
+wall_bump.inputs['Distance'].default_value = 0.045
+links.new(_ridge_ramp.outputs['Color'], wall_bump.inputs['Height'])
+links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])
+# 2) Apply chosen wall colour
+wall_bsdf.inputs['Base Color'].default_value = (0.47843137254901963, 0.1607843137254902, 0.08235294117647059, 1.0)
+mat.diffuse_color = (0.47843137254901963, 0.1607843137254902, 0.08235294117647059, 1.0)
+wall_bsdf.inputs['Roughness'].default_value = 0.78
+wall_bsdf.inputs['Metallic'].default_value = 0.0
+
+# Show materials in viewport (pattern is invisible in Solid shading)
+for _win in bpy.context.window_manager.windows:
+    for _area in _win.screen.areas:
+        if _area.type == 'VIEW_3D':
+            for _space in _area.spaces:
+                if _space.type == 'VIEW_3D':
+                    _space.shading.type = 'MATERIAL'
+                    _space.shading.use_scene_lights = True
+
+_target_names = {'Cutter_window_1'}
+_target_faces = {10, 11}
+for obj in bpy.data.objects:
+    if obj.name not in _target_names:
+        continue
+    if obj.type != 'MESH' or not obj.data:
+        continue
+    if not hasattr(obj.data, 'materials'):
+        continue
+    if 'RegionMaterial_0' not in bpy.data.materials:
+        continue
+    _mat = bpy.data.materials['RegionMaterial_0']
+    _slot = -1
+    for _i, _m in enumerate(obj.data.materials):
+        if _m is _mat:
+            _slot = _i
+            break
+    if _slot < 0:
+        obj.data.materials.append(_mat)
+        _slot = len(obj.data.materials) - 1
+    for _poly in obj.data.polygons:
+        if _poly.index in _target_faces:
+            _poly.material_index = _slot
+    obj.active_material_index = _slot
+
+_target_names = {'Wall_wall_97b0739f'}
+_target_faces = {0, 1}
+for obj in bpy.data.objects:
+    if obj.name not in _target_names:
+        continue
+    if obj.type != 'MESH' or not obj.data:
+        continue
+    if not hasattr(obj.data, 'materials'):
+        continue
+    if 'RegionMaterial_0' not in bpy.data.materials:
+        continue
+    _mat = bpy.data.materials['RegionMaterial_0']
+    _slot = -1
+    for _i, _m in enumerate(obj.data.materials):
+        if _m is _mat:
+            _slot = _i
+            break
+    if _slot < 0:
+        obj.data.materials.append(_mat)
+        _slot = len(obj.data.materials) - 1
+    for _poly in obj.data.polygons:
+        if _poly.index in _target_faces:
+            _poly.material_index = _slot
+    obj.active_material_index = _slot
+
+_target_names = {'Wall_wall_joined_75c522b0'}
+_target_faces = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 46, 47}
+for obj in bpy.data.objects:
+    if obj.name not in _target_names:
+        continue
+    if obj.type != 'MESH' or not obj.data:
+        continue
+    if not hasattr(obj.data, 'materials'):
+        continue
+    if 'RegionMaterial_0' not in bpy.data.materials:
+        continue
+    _mat = bpy.data.materials['RegionMaterial_0']
+    _slot = -1
+    for _i, _m in enumerate(obj.data.materials):
+        if _m is _mat:
+            _slot = _i
+            break
+    if _slot < 0:
+        obj.data.materials.append(_mat)
+        _slot = len(obj.data.materials) - 1
+    for _poly in obj.data.polygons:
+        if _poly.index in _target_faces:
+            _poly.material_index = _slot
+    obj.active_material_index = _slot
+
+_target_names = {'Wall_wall_joined_b5cd8382'}
+_target_faces = {0, 1, 2, 3, 4, 5}
+for obj in bpy.data.objects:
+    if obj.name not in _target_names:
+        continue
+    if obj.type != 'MESH' or not obj.data:
+        continue
+    if not hasattr(obj.data, 'materials'):
+        continue
+    if 'RegionMaterial_0' not in bpy.data.materials:
+        continue
+    _mat = bpy.data.materials['RegionMaterial_0']
+    _slot = -1
+    for _i, _m in enumerate(obj.data.materials):
+        if _m is _mat:
+            _slot = _i
+            break
+    if _slot < 0:
+        obj.data.materials.append(_mat)
+        _slot = len(obj.data.materials) - 1
+    for _poly in obj.data.polygons:
+        if _poly.index in _target_faces:
+            _poly.material_index = _slot
+    obj.active_material_index = _slot
 
 if 'FloorMaterial' in bpy.data.materials:
     bpy.data.materials.remove(bpy.data.materials['FloorMaterial'])

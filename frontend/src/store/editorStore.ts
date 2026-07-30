@@ -156,7 +156,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectionHistory: [[]],
   selectionHistoryIndex: 0,
 
-  viewport: { showAxes: true, showGrid: true, background: 'slate' },
+  viewport: {
+  showAxes: true,
+  showGrid: true,
+  showPatterns: true,
+  showDoorsAndWindows: false,
+  background: 'slate',
+  interactionMode: 'select',
+},
 
   setSceneGraph: (graph) => {
     const projectId = deriveProjectId(graph);

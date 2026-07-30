@@ -10,17 +10,14 @@ import { SelectionToolbar } from '../editor/SelectionToolbar';
 import { SelectionActions } from '../editor/SelectionActions';
 import { MetricsPanel } from '../editor/MetricsPanel';
 import { AIEditPanel } from '../editor/AIEditPanel';
-import { ArrowLeft } from 'lucide-react';
+import { CollapsibleSection } from './CollapsibleSection';
+import { ArrowLeft, Cpu, Save, RefreshCw, Sparkles } from 'lucide-react';
 import * as THREE from 'three';
 
 interface SidebarProps {
   onBackToHome: () => void;
   glbRoot: THREE.Group | null;
   onSelectionTransform: (name: 'grow' | 'shrink' | 'invert' | 'connected' | 'expandToMesh') => void;
-}
-
-interface SidebarProps {
-  onBackToHome: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelectionTransform }) => {
@@ -47,15 +44,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
   const [syncing, setSyncing] = useState(false);
   const [mcpAvailable, setMcpAvailable] = useState(false);
   const [launchingMcp, setLaunchingMcp] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
-      const status = await getBlenderMcpStatus();
-      if (!cancelled) setMcpAvailable(status.available);
+      try {
+        const status = await getBlenderMcpStatus();
+        if (!cancelled) {
+          setMcpAvailable(status.available);
+          if (status.available) setMcpError(null);
+        }
+      } catch {
+        if (!cancelled) setMcpAvailable(false);
+      }
     };
     probe();
-    const handle = window.setInterval(probe, 5000);
+    const handle = window.setInterval(probe, 4000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
@@ -64,10 +69,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
 
   const handleLaunchMcp = async () => {
     setLaunchingMcp(true);
+    setMcpError(null);
     try {
-      await launchBlenderMcp();
-      const status = await getBlenderMcpStatus();
-      setMcpAvailable(status.available);
+      const res = await launchBlenderMcp();
+      if (res.status === 'error') {
+        setMcpError('Blender executable not found on PATH or in standard install locations.');
+      } else {
+        // Give Blender a moment to start the socket server.
+        window.setTimeout(async () => {
+          try {
+            const status = await getBlenderMcpStatus();
+            setMcpAvailable(status.available);
+            if (!status.available) setMcpError('Blender started but MCP addon did not respond.');
+          } catch {
+            /* ignore */
+          }
+        }, 2500);
+      }
+    } catch (err) {
+      setMcpError(err instanceof Error ? err.message : String(err));
     } finally {
       setLaunchingMcp(false);
     }
@@ -79,11 +99,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
       const result = await validateGraph(sceneGraph);
       if (result.status === 'success') {
         setSceneGraph(result.scene_graph);
-        alert('Validation complete. Graph updated.');
       }
     } catch (err) {
       console.error('Validation failed', err);
-      alert('Validation failed.');
     }
   };
 
@@ -112,121 +130,156 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
   };
 
   return (
-    <div className="flex h-full w-64 flex-col overflow-y-auto border-r border-gray-300 bg-gray-100">
-      <div className="border-b border-gray-300 p-3">
+    <div className="flex h-full w-72 flex-col overflow-y-auto border-r border-gray-200 bg-white">
+      <div className="border-b border-gray-200 px-3 py-2">
         <button
           type="button"
           onClick={onBackToHome}
-          className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-900"
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Pipeline
         </button>
       </div>
 
-      <div className="border-b border-gray-300 p-4">
-        <h2 className="text-lg font-bold">Construction Editor</h2>
+      <div className="border-b border-gray-200 px-4 py-3">
+        <h2 className="text-base font-semibold text-gray-900">Construction Editor</h2>
         {sceneGraph && (
-          <p className="mt-1 text-xs text-gray-500">
-            {sceneGraph.walls.length} walls · {sceneGraph.rooms.length} rooms
+          <p className="mt-0.5 text-xs text-gray-500">
+            {sceneGraph.walls.length} walls · {sceneGraph.rooms.length} rooms · {sceneGraph.doors.length} doors · {sceneGraph.windows.length} windows
           </p>
         )}
       </div>
 
-      <SelectionToolbar />
+      <CollapsibleSection title="Selection" badge={`${useEditorStore.getState().selections.length} regions`}>
+        <SelectionToolbar />
+        <div className="mt-3">
+          <SelectionActions
+            onGrow={() => onSelectionTransform('grow')}
+            onShrink={() => onSelectionTransform('shrink')}
+            onInvert={() => onSelectionTransform('invert')}
+            onConnected={() => onSelectionTransform('connected')}
+            onExpandToMesh={() => onSelectionTransform('expandToMesh')}
+          />
+        </div>
+      </CollapsibleSection>
 
-      <SelectionActions
-        onGrow={() => onSelectionTransform('grow')}
-        onShrink={() => onSelectionTransform('shrink')}
-        onInvert={() => onSelectionTransform('invert')}
-        onConnected={() => onSelectionTransform('connected')}
-        onExpandToMesh={() => onSelectionTransform('expandToMesh')}
-      />
-
-      <MetricsPanel glbRoot={glbRoot} />
-
-      <div className="grid grid-cols-2 gap-2 border-b border-gray-300 p-4">
-        <button
-          type="button"
-          onClick={undo}
-          disabled={historyIndex <= 0}
-          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Undo graph
-        </button>
-        <button
-          type="button"
-          onClick={redo}
-          disabled={historyIndex >= history.length - 1}
-          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Redo graph
-        </button>
-        <button
-          type="button"
-          onClick={undoSelection}
-          disabled={selectionHistoryIndex <= 0}
-          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Undo selection
-        </button>
-        <button
-          type="button"
-          onClick={redoSelection}
-          disabled={selectionHistoryIndex >= selectionHistory.length - 1}
-          className="rounded bg-gray-300 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Redo selection
-        </button>
-      </div>
-      <div className="border-b border-gray-300 px-4 py-2">
+      <CollapsibleSection title="History" badge={`${history.length}/${selectionHistory.length}`}>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={undo}
+            disabled={historyIndex <= 0}
+            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Undo graph
+          </button>
+          <button
+            type="button"
+            onClick={redo}
+            disabled={historyIndex >= history.length - 1}
+            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Redo graph
+          </button>
+          <button
+            type="button"
+            onClick={undoSelection}
+            disabled={selectionHistoryIndex <= 0}
+            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Undo sel
+          </button>
+          <button
+            type="button"
+            onClick={redoSelection}
+            disabled={selectionHistoryIndex >= selectionHistory.length - 1}
+            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Redo sel
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => persistProject()}
           disabled={!sceneGraph}
-          className="w-full rounded bg-slate-200 px-2 py-1 text-xs text-slate-800 hover:bg-slate-300 disabled:opacity-50"
+          className="mt-2 flex w-full items-center justify-center gap-1 rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
         >
-          Save session to browser
+          <Save className="h-3 w-3" /> Save session
         </button>
-      </div>
+      </CollapsibleSection>
 
-      <AIEditPanel />
+      <CollapsibleSection title="Metrics">
+        <MetricsPanel glbRoot={glbRoot} />
+      </CollapsibleSection>
 
-      <div className="mt-auto flex flex-col gap-2 p-4">
-        <button
-          type="button"
-          onClick={handleValidate}
-          disabled={!sceneGraph}
-          className="w-full rounded bg-yellow-500 px-4 py-2 text-white hover:bg-yellow-600 disabled:opacity-50"
-        >
-          Validate Graph
-        </button>
-        <button
-          type="button"
-          onClick={handleSync}
-          disabled={!sceneGraph || syncing}
-          className="w-full rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700 disabled:opacity-50"
-        >
-          {syncing ? 'Syncing…' : 'Sync to Blender'}
-        </button>
-        <div className="mt-2 flex items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1.5 text-xs">
-          <span
-            className={`inline-block h-2 w-2 rounded-full ${
-              mcpAvailable ? 'bg-emerald-500' : 'bg-gray-400'
-            }`}
-          />
-          <span className="text-gray-700">
-            Live MCP {mcpAvailable ? 'connected' : 'offline'}
-          </span>
-          {!mcpAvailable && (
-            <button
-              type="button"
-              onClick={handleLaunchMcp}
-              disabled={launchingMcp}
-              className="ml-auto rounded bg-indigo-600 px-2 py-0.5 text-white hover:bg-indigo-700 disabled:opacity-50"
+      <CollapsibleSection title="AI Agent" badge="LLM" defaultOpen={false}>
+        <AIEditPanel />
+      </CollapsibleSection>
+
+      <div className="mt-auto border-t border-gray-200 p-3">
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={handleValidate}
+            disabled={!sceneGraph}
+            className="flex w-full items-center justify-center gap-1.5 rounded bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-40"
+          >
+            <Sparkles className="h-4 w-4" /> Validate Graph
+          </button>
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={!sceneGraph || syncing}
+            className="flex w-full items-center justify-center gap-1.5 rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+          >
+            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync to Blender'}
+          </button>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 font-medium text-gray-700">
+              <Cpu className="h-3 w-3" /> Live MCP
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${
+                mcpAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'
+              }`}
             >
-              {launchingMcp ? 'Launching…' : 'Launch'}
-            </button>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  mcpAvailable ? 'bg-emerald-500' : 'bg-gray-400'
+                }`}
+              />
+              {mcpAvailable ? 'connected' : 'offline'}
+            </span>
+          </div>
+          {!mcpAvailable && (
+            <>
+              <button
+                type="button"
+                onClick={handleLaunchMcp}
+                disabled={launchingMcp}
+                className="mt-2 w-full rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              >
+                {launchingMcp ? 'Launching Blender…' : 'Launch Blender with MCP'}
+              </button>
+              <p className="mt-2 text-[10px] leading-snug text-gray-500">
+                Start Blender with the Floorplan MCP addon loaded so the agent commands
+                can run live. Without Blender running, the browser only re-renders the
+                GLB the backend generated headlessly.
+              </p>
+              {mcpError && (
+                <p className="mt-1 text-[10px] text-red-600">{mcpError}</p>
+              )}
+            </>
+          )}
+          {mcpAvailable && (
+            <p className="mt-2 text-[10px] leading-snug text-emerald-700">
+              Blender MCP socket is reachable. Region edits will dispatch live.
+            </p>
           )}
         </div>
       </div>

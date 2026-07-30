@@ -13,6 +13,7 @@ import {
   raycastMeshes,
 } from '../../lib/selectionGeometry';
 import { isVisibleAt, renderDepthMask } from '../../lib/depthPick';
+import { applyViewportVisuals } from '../../lib/viewportVisuals';
 import type { FaceReference } from '../../types/selection';
 
 const HIGHLIGHT_COLOR = '#4f46e5';
@@ -42,6 +43,9 @@ const BuildingModel: React.FC<BuildingModelProps> = ({ url, version, onSceneRead
   const cacheBustedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${version}`;
   const { scene } = useGLTF(cacheBustedUrl);
   const cloned = useMemo(() => scene.clone(true), [scene]);
+  const viewport = useEditorStore((s) => s.viewport);
+  const getActiveSelection = useEditorStore((s) => s.getActiveSelection);
+  const materialOptions = useEditorStore((s) => s.materialOptions);
 
   useEffect(() => {
     cloned.traverse((child) => {
@@ -50,8 +54,16 @@ const BuildingModel: React.FC<BuildingModelProps> = ({ url, version, onSceneRead
         child.receiveShadow = true;
       }
     });
+    const sel = getActiveSelection();
+    const color = (sel?.metadata?.color as string) || materialOptions.walls.color;
+    const pattern = (sel?.metadata?.pattern as string) || materialOptions.walls.pattern;
+    applyViewportVisuals(cloned, {
+      pattern,
+      baseColor: color,
+      showPatterns: viewport.showPatterns,
+    });
     onSceneReady(cloned);
-  }, [cloned, onSceneReady]);
+  }, [cloned, onSceneReady, viewport.showPatterns, viewport.showDoorsAndWindows, getActiveSelection, materialOptions]);
 
   return <primitive object={cloned} />;
 };
@@ -505,11 +517,24 @@ const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version, onRoot }) 
         enablePan
         enableZoom
         enableRotate
-        mouseButtons={{
-          LEFT: undefined as unknown as THREE.MOUSE,
-          MIDDLE: THREE.MOUSE.PAN,
-          RIGHT: THREE.MOUSE.ROTATE,
-        }}
+        enableDamping
+        dampingFactor={0.08}
+        rotateSpeed={0.6}
+        minDistance={2}
+        maxDistance={60}
+        mouseButtons={
+          viewport.interactionMode === 'orbit'
+            ? {
+                LEFT: THREE.MOUSE.ROTATE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: THREE.MOUSE.PAN,
+              }
+            : {
+                LEFT: undefined as unknown as THREE.MOUSE,
+                MIDDLE: THREE.MOUSE.PAN,
+                RIGHT: THREE.MOUSE.ROTATE,
+              }
+        }
       />
     </>
   );
@@ -587,9 +612,10 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
         {syncStatus === 'error' && (
           <span className="rounded bg-red-600/90 px-2 py-1 text-xs text-white">Sync failed</span>
         )}
+        <ViewportHint />
       </div>
 
-      <div className="absolute top-3 right-3 z-10 flex gap-2">
+      <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
         <ViewportMenu />
         <button
           type="button"
@@ -637,30 +663,81 @@ const CameraResetListener: React.FC = () => {
   return null;
 };
 
+const ViewportHint: React.FC = () => {
+  const { viewport } = useEditorStore();
+  const hint =
+    viewport.interactionMode === 'orbit'
+      ? '🖱 Left-drag: rotate · Right-drag: pan · Scroll: zoom'
+      : '🖱 Left-click: pick · Right-drag: rotate · Scroll: zoom';
+  return <span className="rounded bg-black/40 px-2 py-1 text-[10px] text-white/80">{hint}</span>;
+};
+
 const ViewportMenu: React.FC = () => {
   const { viewport, setViewportOptions } = useEditorStore();
   return (
-    <div className="flex gap-1 rounded bg-white/10 p-1 backdrop-blur">
-      <button
-        type="button"
-        onClick={() => setViewportOptions({ showGrid: !viewport.showGrid })}
-        className={`rounded px-2 py-1 text-xs ${
-          viewport.showGrid ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
-        }`}
-        title="Toggle grid"
-      >
-        Grid
-      </button>
-      <button
-        type="button"
-        onClick={() => setViewportOptions({ showAxes: !viewport.showAxes })}
-        className={`rounded px-2 py-1 text-xs ${
-          viewport.showAxes ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
-        }`}
-        title="Toggle axes"
-      >
-        Axes
-      </button>
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-1 rounded bg-white/10 p-1 backdrop-blur">
+        <button
+          type="button"
+          onClick={() =>
+            setViewportOptions({
+              interactionMode: viewport.interactionMode === 'select' ? 'orbit' : 'select',
+            })
+          }
+          className={`rounded px-2 py-1 text-xs ${
+            viewport.interactionMode === 'orbit' ? 'bg-amber-500/90 text-white' : 'bg-white/30 text-white'
+          }`}
+          title="Toggle between Select and Orbit modes"
+        >
+          {viewport.interactionMode === 'orbit' ? 'Orbit (left-drag)' : 'Select'}
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1 rounded bg-white/10 p-1 backdrop-blur">
+        <button
+          type="button"
+          onClick={() => setViewportOptions({ showGrid: !viewport.showGrid })}
+          className={`rounded px-2 py-1 text-xs ${
+            viewport.showGrid ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
+          }`}
+          title="Toggle grid"
+        >
+          Grid
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewportOptions({ showAxes: !viewport.showAxes })}
+          className={`rounded px-2 py-1 text-xs ${
+            viewport.showAxes ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
+          }`}
+          title="Toggle axes"
+        >
+          Axes
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewportOptions({ showPatterns: !viewport.showPatterns })}
+          className={`rounded px-2 py-1 text-xs ${
+            viewport.showPatterns ? 'bg-white/30 text-white' : 'text-white/70 hover:bg-white/20'
+          }`}
+          title="Toggle pattern preview on walls"
+        >
+          Pattern
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            setViewportOptions({ showDoorsAndWindows: !viewport.showDoorsAndWindows })
+          }
+          className={`rounded px-2 py-1 text-xs ${
+            viewport.showDoorsAndWindows
+              ? 'bg-white/30 text-white'
+              : 'text-white/70 hover:bg-white/20'
+          }`}
+          title="Show doors & windows (solid)"
+        >
+          Cutouts
+        </button>
+      </div>
     </div>
   );
 };

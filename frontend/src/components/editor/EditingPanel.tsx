@@ -4,13 +4,17 @@ import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns'
 import { applyDesignActions, openDesignStream } from '../../api/client';
 import { MetricsPanel } from './MetricsPanel';
 import { AIEditPanel } from './AIEditPanel';
+import { CollapsibleSection } from '../ui/CollapsibleSection';
 import * as THREE from 'three';
 
 interface EditingPanelProps {
   glbRoot?: THREE.Group | null;
+  viewportScreenshot?: () => string | null;
 }
 
-export const EditingPanel: React.FC<EditingPanelProps & { viewportScreenshot?: () => string | null }> = ({ glbRoot = null, viewportScreenshot }) => {
+type Tab = 'design' | 'preset' | 'pattern' | 'ai';
+
+export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, viewportScreenshot }) => {
   const {
     getActiveSelection,
     updateSelectionMetadata,
@@ -40,18 +44,24 @@ export const EditingPanel: React.FC<EditingPanelProps & { viewportScreenshot?: (
   const selection = getActiveSelection();
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>('design');
 
   if (!selection) {
     return (
-      <div className="flex h-full w-80 flex-col border-l border-gray-300 bg-gray-50">
-        <div className="border-b border-gray-300 p-4">
-          <h2 className="text-lg font-bold text-gray-900">Region Editor</h2>
-        </div>
-        <div className="flex flex-1 items-center justify-center p-6">
-          <p className="text-center text-sm text-gray-500">
-            Click, brush, box- or lasso-select geometry in the 3D viewport to edit materials.
+      <div className="flex h-full w-80 flex-col border-l border-gray-200 bg-white">
+        <div className="border-b border-gray-200 px-4 py-3">
+          <h2 className="text-base font-semibold text-gray-900">Region Editor</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            No selection — pick a region in the 3D viewport.
           </p>
         </div>
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-gray-500">
+          Use the tools in the left sidebar (Click / Brush / Box / Lasso) to
+          pick faces, then come back here to edit materials.
+        </div>
+        <CollapsibleSection title="AI Assistant" defaultOpen>
+          <AIEditPanel glbRoot={glbRoot} viewportScreenshot={viewportScreenshot} />
+        </CollapsibleSection>
       </div>
     );
   }
@@ -72,7 +82,10 @@ export const EditingPanel: React.FC<EditingPanelProps & { viewportScreenshot?: (
     try {
       const result = await applyDesignActions({
         scene_graph: sceneGraph,
-        selection,
+        selection: {
+          ...selection,
+          metadata: (selection.metadata ?? {}) as never,
+        },
         operations,
         material_options: useEditorStore.getState().materialOptions,
         include_base: includeBase,
@@ -100,136 +113,194 @@ export const EditingPanel: React.FC<EditingPanelProps & { viewportScreenshot?: (
     }
   };
 
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'design', label: 'Color' },
+    { id: 'preset', label: 'Preset' },
+    { id: 'pattern', label: 'Pattern' },
+    { id: 'ai', label: 'AI' },
+  ];
+
   return (
-    <div className="flex h-full w-80 flex-col border-l border-gray-300 bg-gray-50">
-      <div className="border-b border-gray-300 p-4">
-        <h2 className="text-lg font-bold text-gray-900">Region Editor</h2>
+    <div className="flex h-full w-80 flex-col border-l border-gray-200 bg-white">
+      <div className="border-b border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900">Region Editor</h2>
+          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+            active
+          </span>
+        </div>
         <input
           type="text"
           value={selection.name ?? ''}
           placeholder={`Region ${selection.id.slice(-5)}`}
           onChange={(e) => renameSelection(selection.id, e.target.value)}
-          className="mt-2 w-full rounded border border-gray-300 px-2 py-1 text-xs"
+          className="mt-2 w-full rounded border border-gray-200 bg-white px-2 py-1 text-xs"
         />
-        <p className="mt-1 text-xs text-gray-500">
-          {selection.faceRefs.length} faces · {selection.meshRefs.length} meshes
-        </p>
+        <div className="mt-1.5 flex items-center gap-2 text-[10px] text-gray-500">
+          <span>{selection.faceRefs.length} faces</span>
+          <span>·</span>
+          <span>{selection.meshRefs.length} meshes</span>
+        </div>
       </div>
 
-      <MetricsPanel glbRoot={glbRoot} />
+      <CollapsibleSection title="Metrics">
+        <MetricsPanel glbRoot={glbRoot} />
+      </CollapsibleSection>
 
-      <div className="flex-1 space-y-6 overflow-y-auto p-4">
-        <section>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-700">Color</h3>
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => {
-                updateSelectionMetadata(selection.id, { color: e.target.value });
-              }}
-              className="h-10 w-14 cursor-pointer rounded border border-gray-300"
-            />
-            <input
-              type="text"
-              value={color.toUpperCase()}
-              onChange={(e) => updateSelectionMetadata(selection.id, { color: e.target.value })}
-              className="flex-1 rounded border border-gray-300 px-2 py-1.5 font-mono text-sm"
-            />
-          </div>
-          <button
-            type="button"
-            disabled={applying}
-            onClick={() => syncEdit([{ type: 'set_color', value: color }])}
-            className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            Apply color
-          </button>
-        </section>
+      <div className="border-b border-gray-200 px-4 py-2">
+        <div className="flex gap-1 rounded bg-gray-100 p-1">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`flex-1 rounded px-2 py-1 text-xs font-medium ${
+                tab === t.id
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        <section>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-700">Pattern</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {PATTERN_LIBRARY.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => updateSelectionMetadata(selection.id, { pattern: p.id })}
-                className={`overflow-hidden rounded-lg border-2 p-2 text-left transition ${
-                  pattern === p.id ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-gray-200'
-                }`}
-              >
-                <div
-                  className="mb-1 h-12 rounded border border-black/10"
-                  style={p.previewStyle(color, ridge)}
-                />
-                <span className="text-xs font-medium text-gray-800">{p.name}</span>
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            disabled={applying}
-            onClick={() => syncEdit([{ type: 'apply_pattern', pattern }])}
-            className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            Apply pattern
-          </button>
-        </section>
+      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-3">
+        {tab === 'design' && (
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+              Color
+            </h3>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => updateSelectionMetadata(selection.id, { color: e.target.value })}
+                className="h-9 w-12 cursor-pointer rounded border border-gray-200"
+              />
+              <input
+                type="text"
+                value={color.toUpperCase()}
+                onChange={(e) => updateSelectionMetadata(selection.id, { color: e.target.value })}
+                className="flex-1 rounded border border-gray-200 px-2 py-1.5 font-mono text-sm"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={applying}
+              onClick={() => syncEdit([{ type: 'set_color', value: color }])}
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+            >
+              {applying ? 'Syncing…' : 'Apply color'}
+            </button>
+          </section>
+        )}
 
-        <section>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-700">Material preset</h3>
-          <div className="space-y-1">
-            {MATERIAL_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => {
-                  updateSelectionMetadata(selection.id, {
-                    materialPreset: preset.id,
-                    color: preset.color,
-                    pattern: preset.pattern,
-                  });
-                  setMaterialOptions({
-                    ...materialOptions,
-                    walls: {
-                      ...materialOptions.walls,
-                      theme: preset.id,
+        {tab === 'preset' && (
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+              Material preset
+            </h3>
+            <div className="grid grid-cols-1 gap-1">
+              {MATERIAL_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    updateSelectionMetadata(selection.id, {
+                      materialPreset: preset.id,
                       color: preset.color,
                       pattern: preset.pattern,
-                    },
-                  });
-                }}
-                className="flex w-full items-center gap-2 rounded border border-gray-200 bg-white px-2 py-2 text-left hover:border-indigo-300"
-              >
-                <span
-                  className="h-6 w-6 shrink-0 rounded border border-black/10"
-                  style={{ backgroundColor: preset.color }}
-                />
-                <span className="text-sm text-gray-800">{preset.name}</span>
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            disabled={applying}
-            onClick={() =>
-              syncEdit([
-                { type: 'set_material_preset', preset: selection.metadata.materialPreset ?? 'warm_modern' },
-                { type: 'set_color', value: color },
-                { type: 'apply_pattern', pattern },
-              ])
-            }
-            className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            Apply preset & sync
-          </button>
-        </section>
+                    });
+                    setMaterialOptions({
+                      ...materialOptions,
+                      walls: {
+                        ...materialOptions.walls,
+                        theme: preset.id,
+                        color: preset.color,
+                        pattern: preset.pattern,
+                      },
+                    });
+                  }}
+                  className="flex w-full items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1.5 text-left hover:border-indigo-300"
+                >
+                  <span
+                    className="h-5 w-5 shrink-0 rounded border border-black/10"
+                    style={{ backgroundColor: preset.color }}
+                  />
+                  <span className="flex-1 text-xs text-gray-800">{preset.name}</span>
+                  <span className="text-[10px] uppercase text-gray-400">{preset.pattern}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={applying}
+              onClick={() =>
+                syncEdit([
+                  { type: 'set_material_preset', preset: selection.metadata.materialPreset ?? 'warm_modern' },
+                  { type: 'set_color', value: color },
+                  { type: 'apply_pattern', pattern },
+                ])
+              }
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+            >
+              {applying ? 'Syncing…' : 'Apply preset & sync'}
+            </button>
+          </section>
+        )}
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {tab === 'pattern' && (
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+              Pattern
+            </h3>
+            <div className="grid grid-cols-2 gap-2">
+              {PATTERN_LIBRARY.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => updateSelectionMetadata(selection.id, { pattern: p.id })}
+                  className={`overflow-hidden rounded-lg border p-1.5 text-left transition ${
+                    pattern === p.id
+                      ? 'border-indigo-500 ring-2 ring-indigo-100'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div
+                    className="mb-1 h-10 rounded border border-black/10"
+                    style={p.previewStyle(color, ridge)}
+                  />
+                  <span className="text-[11px] font-medium text-gray-800">{p.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={applying}
+              onClick={() => syncEdit([{ type: 'apply_pattern', pattern }])}
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+            >
+              {applying ? 'Syncing…' : 'Apply pattern'}
+            </button>
+            <p className="mt-2 text-[10px] leading-snug text-gray-500">
+              Pattern preview shows on the 3D viewport as a normal-map overlay.
+              The Blender export uses the real shader (stacked_coils /
+              woven_rope). Browser-only patterns (ribbed, brick, wave, honeycomb)
+              fall back to stacked_coils in Blender.
+            </p>
+          </section>
+        )}
+
+        {tab === 'ai' && (
+          <section>
+            <AIEditPanel glbRoot={glbRoot} viewportScreenshot={viewportScreenshot} />
+          </section>
+        )}
+
+        {error && <p className="text-xs text-red-600">{error}</p>}
       </div>
-
-      <AIEditPanel glbRoot={glbRoot} viewportScreenshot={viewportScreenshot} />
     </div>
   );
 };
