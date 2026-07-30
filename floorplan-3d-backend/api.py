@@ -103,6 +103,8 @@ class AgentChatRequest(BaseModel):
     conversation: Optional[List[Dict[str, Any]]] = None
     available_patterns: Optional[List[str]] = None
     available_materials: Optional[List[str]] = None
+    viewport_image: Optional[str] = None  # base64-encoded PNG (data URL or raw b64)
+    llm_provider: Optional[str] = None
 
 
 class AgentChatResponse(BaseModel):
@@ -117,6 +119,9 @@ class AgentChatResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
     trace_ids: List[str] = Field(default_factory=list)
     runner: Optional[Dict[str, Any]] = None
+    recommendations: List[str] = Field(default_factory=list)
+    explain: Dict[str, Any] = Field(default_factory=dict)
+    rule_report: Optional[Dict[str, Any]] = None
 
 @app.post("/api/upload")
 async def upload_image(
@@ -408,14 +413,23 @@ async def mcp_status():
 @app.post("/api/agent/chat")
 async def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
     """Run the multi-agent orchestrator + execution runner for a user prompt."""
-    from agents import default_registry
+    from agents import default_registry, default_provider
+    from agents.llm.registry import ProviderRegistry
     from agents.orchestrator import Orchestrator
     from agents.runner import run_invocations
+    from agents.tool_registry import TOOL_REGISTRY
     from agents.trace import trace
 
     registry = default_registry()
-    orchestrator = Orchestrator(registry)
-    entry = trace("api.agent_chat", project_id=req.project_id, prompt=req.prompt)
+    available_tools = [n for n, m in TOOL_REGISTRY.items() if m.is_implemented]
+    provider = None
+    try:
+        provider = default_provider(req.llm_provider)
+    except Exception:
+        provider = None
+
+    orchestrator = Orchestrator(registry, provider=provider)
+    entry = trace("api.agent_chat", project_id=req.project_id, prompt=req.prompt, provider=provider.name if provider else "rules")
     result = await orchestrator.run(
         prompt=req.prompt,
         selection=req.selection,
@@ -423,6 +437,8 @@ async def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
         conversation=req.conversation,
         available_patterns=req.available_patterns,
         available_materials=req.available_materials,
+        available_tools=available_tools,
+        viewport_image_b64=req.viewport_image,
     )
 
     runner_payload: Optional[Dict[str, Any]] = None
@@ -464,6 +480,9 @@ async def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
         notes=result.notes,
         trace_ids=result.trace_ids,
         runner=runner_payload,
+        recommendations=result.recommendations,
+        explain=result.explain,
+        rule_report=result.rule_report,
     )
 
 
@@ -472,6 +491,20 @@ async def agent_log(project_id: Optional[str] = None, limit: int = 50):
     from agents.trace import TRACE_LOG
     items = TRACE_LOG.recent(project_id=project_id, limit=limit)
     return {"items": items}
+
+
+@app.get("/api/agent/providers")
+async def agent_providers():
+    from agents.llm.registry import default_registry as default_llm_registry
+    reg = default_llm_registry()
+    status = []
+    for name in reg.names():
+        try:
+            provider = reg.get(name)
+            status.append({"name": name, "available": provider.is_available()})
+        except Exception:
+            status.append({"name": name, "available": False})
+    return {"providers": status}
 
 
 @app.post("/api/design/ai-plan")

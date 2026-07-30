@@ -28,9 +28,12 @@ class AgentRegistry:
 
 
 def default_registry() -> AgentRegistry:
-    """Build the default registry with Design, Geometry, and Execution agents."""
-    from .design_agent import DesignAgent
-    from .geometry_agent import GeometryAgent
+    """Build the default registry with Design, Geometry, and Execution agents.
+
+    Design + Geometry agents are LLM-backed (with rule-based fallback).
+    Pass an ``LLMProvider`` to enable LLM planning.
+    """
+    from .llm_agents import DesignAgent, GeometryAgent
     from .execution_agent import ExecutionAgent
 
     reg = AgentRegistry()

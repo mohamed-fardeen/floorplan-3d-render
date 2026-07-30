@@ -14,6 +14,8 @@ export interface AgentChatRequest {
   conversation?: Array<Record<string, unknown>>;
   available_patterns?: string[];
   available_materials?: string[];
+  viewport_image?: string; // base64-encoded PNG
+  llm_provider?: string;
 }
 
 export interface AgentInvocation {
@@ -33,6 +35,19 @@ export interface AgentChatResponse {
   error?: string | null;
   notes: string[];
   trace_ids: string[];
+  recommendations: string[];
+  explain: {
+    intent: string;
+    reason?: string;
+    invoked_agents: string[];
+    design?: Record<string, unknown>;
+    geometry?: Record<string, unknown>;
+    expected_result?: string;
+  };
+  rule_report?: {
+    ok: boolean;
+    violations: Array<Record<string, unknown>>;
+  } | null;
   runner?: {
     applied: AgentInvocation[];
     deferred: AgentInvocation[];

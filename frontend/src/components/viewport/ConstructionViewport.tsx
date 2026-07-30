@@ -520,6 +520,7 @@ interface ConstructionViewportProps {
   glbUrl?: string | null;
   sceneGraph?: SceneGraph | null;
   onRoot?: (g: THREE.Group | null) => void;
+  registerScreenshot?: (fn: () => string | null) => void;
 }
 
 export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
@@ -527,6 +528,7 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
   glbUrl: glbUrlProp,
   sceneGraph: sceneGraphProp,
   onRoot,
+  registerScreenshot,
 }) => {
   const store = useEditorStore();
   const glbUrl = glbUrlProp ?? store.glbUrl;
@@ -602,8 +604,17 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
         shadows
         camera={{ position: [6, 5, 8], fov: 45, near: 0.1, far: 200 }}
         className="flex-1"
-        onCreated={({ camera }) => {
+        onCreated={({ gl, camera }) => {
           camera.lookAt(0, 1.5, 0);
+          if (registerScreenshot) {
+            registerScreenshot(() => {
+              try {
+                return gl.domElement.toDataURL('image/png');
+              } catch {
+                return null;
+              }
+            });
+          }
         }}
       >
         <SceneContent glbUrl={glbUrl} version={glbVersion} onRoot={onRoot} />

@@ -10,6 +10,7 @@ import type {
   AgentLogEntry,
   AgentChatRequest,
 } from '../../api/agent';
+import { fetchLlmProviders } from '../../api/llm';
 import { applyDesignActions } from '../../api/client';
 
 interface ChatTurn {
@@ -28,12 +29,22 @@ const formatTrace = (entry: AgentLogEntry): string => {
   return `[${entry.step}] ${meta}`;
 };
 
-export const AIEditPanel: React.FC = () => {
+import * as THREE from 'three';
+
+interface AIEditPanelProps {
+  viewportScreenshot?: () => string | null;
+  glbRoot?: THREE.Group | null;
+}
+
+export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) => {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [trace, setTrace] = useState<AgentLogEntry[]>([]);
+  const [provider, setProvider] = useState<string>('');
+  const [providers, setProviders] = useState<{ name: string; available: boolean }[]>([]);
+  const [includeImage, setIncludeImage] = useState(true);
   const conversationRef = useRef<Array<Record<string, unknown>>>([]);
 
   const {
@@ -58,8 +69,13 @@ export const AIEditPanel: React.FC = () => {
     let cancelled = false;
     const refresh = async () => {
       try {
-        const log = await fetchAgentLog(projectId, 30);
-        if (!cancelled) setTrace(log.items);
+        const [log, prov] = await Promise.all([fetchAgentLog(projectId, 30), fetchLlmProviders()]);
+        if (cancelled) return;
+        setTrace(log.items);
+        setProviders(prov);
+        if (!provider && prov.find((p) => p.available)?.name) {
+          setProvider('');
+        }
       } catch {
         // network may be down in dev; fail silently
       }
@@ -79,6 +95,16 @@ export const AIEditPanel: React.FC = () => {
     setSyncStatus('syncing');
     setSyncStage('orchestrator', 'Routing prompt');
 
+    let viewportImage: string | undefined;
+    if (includeImage && viewportScreenshot) {
+      try {
+        const data = viewportScreenshot();
+        if (data) viewportImage = data.startsWith('data:') ? data.split(',')[1] : data;
+      } catch {
+        // ignore — image is optional
+      }
+    }
+
     const req: AgentChatRequest = {
       prompt: prompt.trim(),
       selection: {
@@ -91,6 +117,8 @@ export const AIEditPanel: React.FC = () => {
       conversation: conversationRef.current,
       available_patterns: PATTERN_LIBRARY.map((p) => p.id),
       available_materials: MATERIAL_PRESETS.map((p) => p.id),
+      viewport_image: viewportImage,
+      llm_provider: provider || undefined,
     };
 
     try {
@@ -124,11 +152,15 @@ export const AIEditPanel: React.FC = () => {
         });
       }
 
+      const noteLines = [...result.notes];
+      if (result.recommendations?.length) {
+        noteLines.push('Suggestions: ' + result.recommendations.join(' · '));
+      }
       setHistory((h) => [
         ...h,
         {
           role: 'agent',
-          text: result.notes.join(' • ') || `${result.invoked_agents.join(' → ')} complete`,
+          text: noteLines.join(' • ') || `${result.invoked_agents.join(' → ')} complete`,
           response: result,
           ts: Date.now(),
         },
@@ -169,6 +201,8 @@ export const AIEditPanel: React.FC = () => {
     }
   };
 
+  const activeProvider = providers.find((p) => p.available);
+
   return (
     <div className="flex flex-col gap-3 border-t border-gray-300 bg-white p-4">
       <div className="flex items-center justify-between">
@@ -176,6 +210,32 @@ export const AIEditPanel: React.FC = () => {
         <span className="text-[10px] uppercase tracking-wide text-gray-500">
           orchestrator · design · geometry · execution
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-600">
+        <label className="flex items-center gap-1">
+          <input
+            type="checkbox"
+            checked={includeImage}
+            onChange={(e) => setIncludeImage(e.target.checked)}
+          />
+          include viewport image
+        </label>
+        <label className="flex items-center gap-1">
+          provider
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="rounded border border-gray-300 bg-white px-1 py-0.5 text-[10px]"
+          >
+            <option value="">{activeProvider ? `auto (${activeProvider.name})` : 'auto (rules only)'}</option>
+            {providers.map((p) => (
+              <option key={p.name} value={p.name} disabled={!p.available}>
+                {p.name}{p.available ? '' : ' (no key)'}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-gray-200 bg-gray-50 p-2 text-xs">
@@ -191,10 +251,23 @@ export const AIEditPanel: React.FC = () => {
           >
             <div className="text-[10px] uppercase opacity-70">{turn.role}</div>
             <div>{turn.text}</div>
-            {turn.response && turn.response.invoked_agents.length > 0 && (
-              <div className="mt-1 text-[10px] text-gray-500">
-                agents: {turn.response.invoked_agents.join(' → ')}
-              </div>
+            {turn.response && (
+              <details className="mt-1 text-[10px] text-gray-500">
+                <summary className="cursor-pointer">Why?</summary>
+                <div className="mt-1 space-y-1">
+                  <div>intent: <code>{turn.response.explain?.intent}</code></div>
+                  <div>agents: {turn.response.invoked_agents.join(' → ')}</div>
+                  <div>expected: {turn.response.explain?.expected_result}</div>
+                  {turn.response.recommendations?.length ? (
+                    <div>suggestions: {turn.response.recommendations.join(' · ')}</div>
+                  ) : null}
+                  {turn.response.rule_report?.violations?.length ? (
+                    <div>
+                      rule warnings: {turn.response.rule_report.violations.length}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
             )}
           </div>
         ))}
@@ -203,7 +276,7 @@ export const AIEditPanel: React.FC = () => {
       <textarea
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder='e.g. "Curve this wall by 0.5m and bevel the edge"'
+        placeholder='e.g. "Curve this entrance by 0.5m and apply sage stacked coils"'
         rows={2}
         className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
         disabled={!selection}

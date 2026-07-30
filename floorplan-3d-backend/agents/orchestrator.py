@@ -1,34 +1,44 @@
-"""Orchestrator — multi-agent coordinator.
+"""Orchestrator — multi-agent coordinator (LLM-backed).
 
 Flow:
 
     user prompt
        │
        ▼
-    Orchestrator classifies intent (design / geometry / mixed / clarify / reject)
+    OrchestratorLLM classifies intent (design / geometry / mixed / clarify / reject)
        │
        ▼
-    Invokes Design / Geometry agents → collects structured operations & tool calls
+    Invokes Design / Geometry agents → structured operations / tool calls
        │
        ▼
     Validates outputs (no free-form Blender code reaches Execution Agent)
        │
        ▼
+    Construction Rules Engine
+       │
+       ▼
     Execution Agent translates to Blender tool invocations
        │
        ▼
-    Blender MCP or script-fallback pipeline runs the tools
+    Runner dispatches via MCP / script fallback
        │
        ▼
     Trace entry recorded for every step
+
+The Orchestrator never calls an LLM directly; it delegates to
+``OrchestratorLLM`` so providers can be swapped without changes here.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .base import Agent, AgentRequest, AgentResponse
+from .llm.base import LLMProvider, ProviderUnavailable
+from .llm_agents import DesignAgent, GeometryAgent, OrchestratorLLM, SummariserAgent
+from .memory import MEMORY_STORE, MemoryTurn
 from .registry import AgentRegistry
 from .rules import validate_invocations, validate_selection
 from .trace import trace
@@ -52,16 +62,34 @@ class OrchestratorResult:
     notes: List[str] = field(default_factory=list)
     trace_ids: List[str] = field(default_factory=list)
     rule_report: Optional[Dict[str, Any]] = None
-
-
-_DESIGN_HINTS = {"color", "colour", "pattern", "paint", "tint", "shade", "white", "navy", "sage"}
-_GEOMETRY_HINTS = {"curve", "bevel", "extrude", "split", "merge", "offset", "round", "bend"}
-_REJECT_HINTS = {"hello", "hi ", "thanks", "thank you", "who are you"}
+    explain: Dict[str, Any] = field(default_factory=dict)
+    recommendations: List[str] = field(default_factory=list)
 
 
 class Orchestrator:
-    def __init__(self, registry: AgentRegistry) -> None:
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        provider: Optional[LLMProvider] = None,
+        orchestrator_llm: Optional[OrchestratorLLM] = None,
+        summariser: Optional[SummariserAgent] = None,
+    ) -> None:
         self.registry = registry
+        self.provider = provider
+        self.orchestrator_llm = orchestrator_llm or OrchestratorLLM(provider)
+        self.summariser = summariser or SummariserAgent(provider)
+        # Propagate provider to any LLM-capable agents already registered.
+        for agent in [self.registry.get(n) for n in ("design", "geometry") if n in self.registry.names()]:
+            if hasattr(agent, "set_provider"):
+                agent.set_provider(provider)  # type: ignore[attr-defined]
+
+    def set_provider(self, provider: Optional[LLMProvider]) -> None:
+        self.provider = provider
+        self.orchestrator_llm.set_provider(provider)
+        self.summariser.set_provider(provider)
+        for agent in [self.registry.get(n) for n in self.registry.names()]:
+            if hasattr(agent, "set_provider"):
+                agent.set_provider(provider)  # type: ignore[attr-defined]
 
     async def run(
         self,
@@ -71,92 +99,101 @@ class Orchestrator:
         conversation: Optional[List[Dict[str, Any]]] = None,
         available_patterns: Optional[List[str]] = None,
         available_materials: Optional[List[str]] = None,
+        available_tools: Optional[List[str]] = None,
+        viewport_image_b64: Optional[str] = None,
     ) -> OrchestratorResult:
-        prompt_low = (prompt or "").strip().lower()
-        if not prompt_low:
-            return self._reject("empty prompt", project_id)
-
-        if any(h in prompt_low for h in _REJECT_HINTS) and len(prompt_low) < 30:
-            return self._reject("small-talk / out-of-scope", project_id)
-
-        # Decide intent.
-        design_score = sum(1 for h in _DESIGN_HINTS if h in prompt_low)
-        geometry_score = sum(1 for h in _GEOMETRY_HINTS if h in prompt_low)
-
-        if design_score == 0 and geometry_score == 0:
-            clarification = (
-                "I can help with design (colors, patterns, materials) or geometry "
-                "(curve, bevel, extrude, split, merge, offset). Which would you like?"
-            )
-            entry = trace("orchestrator.clarify", project_id=project_id, prompt=prompt, clarification=clarification)
-            return OrchestratorResult(
-                intent="clarify",
-                clarification=clarification,
-                trace_ids=[entry["id"]],
-            )
-
-        intent = (
-            "mixed"
-            if design_score > 0 and geometry_score > 0
-            else "design"
-            if design_score > 0
-            else "geometry"
-        )
-
-        # Selection present?
+        conversation = conversation or []
         selection_mesh_names = [
             m.get("objectName") for m in (selection.get("meshRefs") or []) if m.get("objectName")
         ]
+
+        # Record into memory.
+        mem = MEMORY_STORE.get(project_id or "unsaved")
+        mem.record_turn(MemoryTurn(role="user", content=prompt))
+
+        # Classify intent (LLM-backed with heuristic fallback).
+        classification = await self.orchestrator_llm.classify(
+            prompt,
+            selection_present=bool(selection_mesh_names),
+            available_tools=available_tools or self.registry.names(),
+        )
+        intent = classification.get("intent", "clarify")
+        invoked: List[str] = list(classification.get("invoked_agents") or [])
+
+        trace_entry = trace(
+            "orchestrator.classify",
+            project_id=project_id,
+            intent=intent,
+            invoked=invoked,
+            reason=classification.get("reason"),
+            clarification=classification.get("clarification"),
+        )
+
+        result = OrchestratorResult(
+            intent=intent,
+            invoked_agents=invoked,
+            explain={
+                "intent": intent,
+                "reason": classification.get("reason"),
+                "invoked_agents": invoked,
+            },
+        )
+        result.trace_ids.append(trace_entry["id"])
+
+        if intent == "reject":
+            result.error = classification.get("reason") or "out of scope"
+            return result
+
+        if intent == "clarify":
+            result.clarification = classification.get("clarification") or "Could you clarify?"
+            return result
+
         if not selection_mesh_names:
-            clarification = "Please select a region in the 3D viewport first."
-            entry = trace(
-                "orchestrator.clarify",
-                project_id=project_id,
-                prompt=prompt,
-                reason="no selection",
-                clarification=clarification,
-            )
-            return OrchestratorResult(
-                intent="clarify",
-                clarification=clarification,
-                trace_ids=[entry["id"]],
-            )
+            result.intent = "clarify"
+            result.clarification = "Please select a region in the 3D viewport first."
+            return result
 
-        invoked: List[str] = []
-        result = OrchestratorResult(intent=intent, invoked_agents=invoked)
-
-        # Build a common request for agents that need selection context.
+        # Build request context once.
         request_ctx = AgentRequest(
             prompt=prompt,
             selection_summary=selection,
             selection_mesh_names=selection_mesh_names,
             available_patterns=available_patterns or [],
             available_materials=available_materials or [],
-            available_tools=[a.name for a in [self.registry.get(n) for n in ("design", "geometry", "execution")]],
-            conversation=conversation or [],
+            available_tools=available_tools or self.registry.names(),
+            conversation=conversation,
             context={
                 "face_indices": [
                     int(f.get("faceIndex"))
                     for f in (selection.get("faceRefs") or [])
                     if isinstance(f.get("faceIndex"), int)
                 ],
+                "design_intent": mem.design_intent,
+                "images": [],
             },
         )
+        if viewport_image_b64:
+            request_ctx.context["images"] = [{
+                "data": viewport_image_b64,
+                "mime_type": "image/png",
+            }]
 
-        # 1. Design Agent (if applicable).
         design_response: Optional[AgentResponse] = None
-        if intent in {"design", "mixed"}:
+        geometry_response: Optional[AgentResponse] = None
+
+        # Design Agent.
+        if intent in {"design", "mixed"} and "design" in self.registry.names():
             design_agent = self.registry.get("design")
-            invoked.append(design_agent.name)
-            entry = trace(
-                "agent.invoke",
-                project_id=project_id,
-                agent=design_agent.name,
-                prompt=prompt,
-                selection=selection_mesh_names,
-            )
+            invoked.append(design_agent.name) if design_agent.name not in invoked else None
+            entry = trace("agent.invoke", project_id=project_id, agent=design_agent.name, prompt=prompt)
             result.trace_ids.append(entry["id"])
             design_response = await design_agent.run(request_ctx)
+            result.explain.setdefault("design", {
+                "operations": design_response.operations,
+                "reasoning": design_response.context_extra.get("reasoning", ""),
+                "source": design_response.context_extra.get("source"),
+            })
+            result.recommendations.extend(design_response.context_extra.get("recommendations") or [])
             entry = trace(
                 "agent.result",
                 project_id=project_id,
@@ -172,26 +209,23 @@ class Orchestrator:
             op_errors = validate_design_operations(design_response.operations)
             if op_errors:
                 result.error = "design validation: " + "; ".join(op_errors)
-                entry = trace("agent.validation_failed", project_id=project_id, errors=op_errors)
-                result.trace_ids.append(entry["id"])
                 return result
             result.design_operations = design_response.operations
             result.notes.extend(design_response.notes)
 
-        # 2. Geometry Agent (if applicable).
-        geometry_response: Optional[AgentResponse] = None
-        if intent in {"geometry", "mixed"}:
+        # Geometry Agent.
+        if intent in {"geometry", "mixed"} and "geometry" in self.registry.names():
             geometry_agent = self.registry.get("geometry")
-            invoked.append(geometry_agent.name)
-            entry = trace(
-                "agent.invoke",
-                project_id=project_id,
-                agent=geometry_agent.name,
-                prompt=prompt,
-                selection=selection_mesh_names,
-            )
+            invoked.append(geometry_agent.name) if geometry_agent.name not in invoked else None
+            entry = trace("agent.invoke", project_id=project_id, agent=geometry_agent.name, prompt=prompt)
             result.trace_ids.append(entry["id"])
             geometry_response = await geometry_agent.run(request_ctx)
+            result.explain.setdefault("geometry", {
+                "tool_calls": geometry_response.tool_calls,
+                "reasoning": geometry_response.context_extra.get("reasoning", ""),
+                "source": geometry_response.context_extra.get("source"),
+            })
+            result.recommendations.extend(geometry_response.context_extra.get("recommendations") or [])
             entry = trace(
                 "agent.result",
                 project_id=project_id,
@@ -210,50 +244,82 @@ class Orchestrator:
             tool_errors = validate_tool_calls(geometry_response.tool_calls)
             if tool_errors:
                 result.error = "geometry validation: " + "; ".join(tool_errors)
-                entry = trace("agent.validation_failed", project_id=project_id, errors=tool_errors)
-                result.trace_ids.append(entry["id"])
                 return result
             result.geometry_tool_calls = geometry_response.tool_calls
             result.notes.extend(geometry_response.notes)
 
-        # 3. Execution Agent.
-        execution_agent = self.registry.get("execution")
-        invoked.append(execution_agent.name)
-        exec_request = AgentRequest(
-            prompt=prompt,
-            selection_summary=selection,
-            selection_mesh_names=selection_mesh_names,
-            available_patterns=available_patterns or [],
-            available_materials=available_materials or [],
-            available_tools=[a.name for a in [self.registry.get(n) for n in ("design", "geometry", "execution")]],
-            conversation=conversation or [],
-            context={
-                "design_operations": result.design_operations,
-                "geometry_tool_calls": result.geometry_tool_calls,
-                "face_indices": request_ctx.context.get("face_indices") or [],
-            },
-        )
-        entry = trace(
-            "agent.invoke",
-            project_id=project_id,
-            agent=execution_agent.name,
-            design_ops=result.design_operations,
-            geom_calls=result.geometry_tool_calls,
-        )
-        result.trace_ids.append(entry["id"])
-        execution_response = await execution_agent.run(exec_request)
-        entry = trace(
-            "agent.result",
-            project_id=project_id,
-            agent=execution_agent.name,
-            invocations=execution_response.tool_calls,
-            notes=execution_response.notes,
-        )
-        result.trace_ids.append(entry["id"])
-        result.execution_invocations = execution_response.tool_calls
-        result.notes.extend(execution_response.notes)
-        result.fallback_to_script = bool(execution_response.context_extra.get("fallback_to_script", False))
+        # Execution Agent.
+        if "execution" in self.registry.names():
+            execution_agent = self.registry.get("execution")
+            invoked.append(execution_agent.name) if execution_agent.name not in invoked else None
+            exec_request = AgentRequest(
+                prompt=prompt,
+                selection_summary=selection,
+                selection_mesh_names=selection_mesh_names,
+                available_patterns=available_patterns or [],
+                available_materials=available_materials or [],
+                available_tools=available_tools or self.registry.names(),
+                conversation=conversation,
+                context={
+                    "design_operations": result.design_operations,
+                    "geometry_tool_calls": result.geometry_tool_calls,
+                    "face_indices": request_ctx.context.get("face_indices") or [],
+                },
+            )
+            entry = trace(
+                "agent.invoke",
+                project_id=project_id,
+                agent=execution_agent.name,
+                design_ops=result.design_operations,
+                geom_calls=result.geometry_tool_calls,
+            )
+            result.trace_ids.append(entry["id"])
+            execution_response = await execution_agent.run(exec_request)
+            result.execution_invocations = execution_response.tool_calls
+            result.notes.extend(execution_response.notes)
+            result.fallback_to_script = bool(execution_response.context_extra.get("fallback_to_script", False))
+            entry = trace(
+                "agent.result",
+                project_id=project_id,
+                agent=execution_agent.name,
+                invocations=execution_response.tool_calls,
+                notes=execution_response.notes,
+            )
+            result.trace_ids.append(entry["id"])
 
+        # Construction Rules.
+        rule_report = validate_invocations(result.execution_invocations, selection)
+        result.rule_report = rule_report.to_dict()
+        if not rule_report.ok:
+            errors = [v for v in rule_report.violations if v.severity == "error"]
+            result.error = "rule_violation: " + "; ".join(v.message for v in errors)
+            entry = trace("rules.failed", project_id=project_id, errors=[v.message for v in errors])
+            result.trace_ids.append(entry["id"])
+            return result
+        entry = trace(
+            "rules.passed",
+            project_id=project_id,
+            warnings=[v.message for v in rule_report.violations if v.severity == "warning"],
+        )
+        result.trace_ids.append(entry["id"])
+
+        # Update memory.
+        for op in result.design_operations:
+            mat = op.get("value") if op.get("type") == "set_color" else op.get("pattern") or op.get("preset")
+            if mat:
+                mem.record_material(str(mat))
+        for call in result.geometry_tool_calls:
+            mem.record_tool(call.get("tool", ""))
+        mem.update_intent(classification.get("reason", ""))
+        mem.record_turn(MemoryTurn(role="agent", content="; ".join(result.notes) or intent, intent=intent))
+        for sel in selection_mesh_names:
+            mem.record_selection(sel)
+
+        # Summarise on overflow.
+        if MEMORY_STORE.should_summarise(project_id or "unsaved"):
+            asyncio.create_task(self._maybe_summarise(project_id or "unsaved", mem))
+
+        # Done.
         entry = trace(
             "orchestrator.done",
             project_id=project_id,
@@ -264,30 +330,27 @@ class Orchestrator:
             invocations=len(result.execution_invocations),
         )
         result.trace_ids.append(entry["id"])
-
-        # Construction rules pass — last gate before the runner.
-        rule_report = validate_invocations(result.execution_invocations, selection)
-        rule_report_dict = rule_report.to_dict()
-        result.rule_report = rule_report_dict
-        if not rule_report.ok:
-            errors = [v for v in rule_report.violations if v.severity == "error"]
-            result.error = "rule_violation: " + "; ".join(v.message for v in errors)
-            entry = trace(
-                "rules.failed",
-                project_id=project_id,
-                errors=[v.message for v in errors],
-            )
-            result.trace_ids.append(entry["id"])
-            return result
-
-        entry = trace(
-            "rules.passed",
-            project_id=project_id,
-            warnings=[v.message for v in rule_report.violations if v.severity == "warning"],
+        result.explain["invoked_agents"] = invoked
+        result.explain["expected_result"] = (
+            f"{len(result.execution_invocations)} tool call(s) will be dispatched via "
+            f"{'MCP' if not result.fallback_to_script else 'script fallback'}."
         )
-        result.trace_ids.append(entry["id"])
         return result
 
-    def _reject(self, reason: str, project_id: Optional[str]) -> OrchestratorResult:
-        entry = trace("orchestrator.reject", project_id=project_id, reason=reason)
-        return OrchestratorResult(intent="reject", error=reason, trace_ids=[entry["id"]])
+    async def _maybe_summarise(self, project_id: str, mem) -> None:
+        if mem.summarising:
+            return
+        mem.summarising = True
+        try:
+            summary = await self.summariser.summarise(
+                turns=[{"role": t.role, "content": t.content} for t in mem.turns],
+                previous_summary=mem.summary,
+            )
+            mem.summary = summary.get("summary", mem.summary)
+        except Exception as exc:  # pragma: no cover
+            trace("memory.summarise_failed", project_id=project_id, error=str(exc))
+        finally:
+            mem.summarising = False
+
+
+__all__ = ["Orchestrator", "OrchestratorResult"]

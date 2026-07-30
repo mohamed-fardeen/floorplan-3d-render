@@ -1,0 +1,64 @@
+{
+  "total": 6,
+  "intent_accuracy": 1.0,
+  "tool_selection_accuracy": 1.0,
+  "clarification_rate": 0.3333333333333333,
+  "validation_success_rate": 1.0,
+  "avg_latency_ms": 0.5093499997504599,
+  "cases": [
+    {
+      "case_id": "design-sage-coils",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": false,
+      "latency_ms": 1.1905000001206645,
+      "notes": []
+    },
+    {
+      "case_id": "geometry-curve-wall",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": false,
+      "latency_ms": 0.5950999993729056,
+      "notes": []
+    },
+    {
+      "case_id": "mixed-design-geometry",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": false,
+      "latency_ms": 1.0707999999794993,
+      "notes": []
+    },
+    {
+      "case_id": "clarify-vague",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": true,
+      "latency_ms": 0.09089999912248459,
+      "notes": []
+    },
+    {
+      "case_id": "reject-no-selection",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": true,
+      "latency_ms": 0.0610999995842576,
+      "notes": []
+    },
+    {
+      "case_id": "reject-small-talk",
+      "intent_correct": true,
+      "tool_selection_correct": true,
+      "validation_success": true,
+      "clarification_used": false,
+      "latency_ms": 0.047700000322947744,
+      "notes": []
+    }
+  ]
+}

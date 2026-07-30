@@ -3,13 +3,14 @@ import { useEditorStore } from '../../store/editorStore';
 import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
 import { applyDesignActions, openDesignStream } from '../../api/client';
 import { MetricsPanel } from './MetricsPanel';
+import { AIEditPanel } from './AIEditPanel';
 import * as THREE from 'three';
 
 interface EditingPanelProps {
   glbRoot?: THREE.Group | null;
 }
 
-export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null }) => {
+export const EditingPanel: React.FC<EditingPanelProps & { viewportScreenshot?: () => string | null }> = ({ glbRoot = null, viewportScreenshot }) => {
   const {
     getActiveSelection,
     updateSelectionMetadata,
@@ -227,6 +228,8 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null }) =>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
+
+      <AIEditPanel glbRoot={glbRoot} viewportScreenshot={viewportScreenshot} />
     </div>
   );
 };

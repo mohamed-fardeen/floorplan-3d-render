@@ -21,6 +21,7 @@ interface OpenEditorPayload {
 function App() {
   const [view, setView] = useState<View>('home');
   const [glbRoot, setGlbRoot] = useState<THREE.Group | null>(null);
+  const screenshotRef = useRef<(() => string | null) | null>(null);
   const { setSceneGraph, setGlbUrl, setMaterialOptions, setExportOptions, transformActiveSelectionFaces } =
     useEditorStore();
   const transformRef = useRef(transformActiveSelectionFaces);
@@ -43,6 +44,9 @@ function App() {
   const handleBackToHome = () => setView('home');
 
   const onRoot = useCallback((g: THREE.Group | null) => setGlbRoot(g), []);
+  const registerScreenshot = useCallback((fn: () => string | null) => {
+    screenshotRef.current = fn;
+  }, []);
 
   if (view === 'editor') {
     return (
@@ -75,8 +79,11 @@ function App() {
             }
           }}
         />
-        <ConstructionViewport className="min-w-0 flex-1" onRoot={onRoot} />
-        <EditingPanel glbRoot={glbRoot} />
+        <ConstructionViewport className="min-w-0 flex-1" onRoot={onRoot} registerScreenshot={registerScreenshot} />
+        <EditingPanel
+          glbRoot={glbRoot}
+          viewportScreenshot={() => screenshotRef.current?.() ?? null}
+        />
       </div>
     );
   }
