@@ -1,12 +1,40 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
-import { planDesignFromPrompt, applyDesignActions } from '../../api/client';
+import { MATERIAL_PRESETS, PATTERN_LIBRARY } from '../../lib/patterns';
+import {
+  fetchAgentLog,
+  postAgentChat,
+} from '../../api/agent';
+import type {
+  AgentChatResponse,
+  AgentLogEntry,
+  AgentChatRequest,
+} from '../../api/agent';
+import { applyDesignActions } from '../../api/client';
+
+interface ChatTurn {
+  role: 'user' | 'agent';
+  text: string;
+  response?: AgentChatResponse;
+  ts: number;
+}
+
+const formatTrace = (entry: AgentLogEntry): string => {
+  const meta = Object.entries(entry)
+    .filter(([k, v]) => k !== 'id' && k !== 'ts' && v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .slice(0, 3)
+    .join(' ');
+  return `[${entry.step}] ${meta}`;
+};
 
 export const AIEditPanel: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [lastPlan, setLastPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const [trace, setTrace] = useState<AgentLogEntry[]>([]);
+  const conversationRef = useRef<Array<Record<string, unknown>>>([]);
 
   const {
     getActiveSelection,
@@ -15,56 +43,124 @@ export const AIEditPanel: React.FC = () => {
     includeRoof,
     applyDesignPlanLocally,
     setSyncStatus,
+    setSyncStage,
     bumpGlbVersion,
     setGlbUrl,
   } = useEditorStore();
 
-  const runAIEdit = async () => {
-    const selection = getActiveSelection();
-    if (!sceneGraph || !selection || !prompt.trim()) return;
+  const selection = getActiveSelection();
+  const projectId = useMemo(() => {
+    const meta = sceneGraph?.metadata as { project_name?: string } | undefined;
+    return (meta?.project_name ?? 'unsaved').replace(/\s+/g, '_').toLowerCase();
+  }, [sceneGraph]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const log = await fetchAgentLog(projectId, 30);
+        if (!cancelled) setTrace(log.items);
+      } catch {
+        // network may be down in dev; fail silently
+      }
+    };
+    refresh();
+    const handle = window.setInterval(refresh, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [projectId, loading]);
+
+  const sendPrompt = async () => {
+    if (!sceneGraph || !selection || !prompt.trim()) return;
     setLoading(true);
     setError(null);
     setSyncStatus('syncing');
+    setSyncStage('orchestrator', 'Routing prompt');
+
+    const req: AgentChatRequest = {
+      prompt: prompt.trim(),
+      selection: {
+        id: selection.id,
+        meshRefs: selection.meshRefs,
+        faceRefs: selection.faceRefs,
+        metadata: selection.metadata as Record<string, unknown>,
+      },
+      project_id: projectId,
+      conversation: conversationRef.current,
+      available_patterns: PATTERN_LIBRARY.map((p) => p.id),
+      available_materials: MATERIAL_PRESETS.map((p) => p.id),
+    };
 
     try {
-      const planResult = await planDesignFromPrompt({
-        prompt: prompt.trim(),
-        selection_summary: {
-          face_count: selection.faceRefs.length,
-          mesh_names: selection.meshRefs.map((m) => m.objectName),
-          current_metadata: selection.metadata,
+      const result = await postAgentChat(req);
+      conversationRef.current = [
+        ...conversationRef.current,
+        { role: 'user', content: req.prompt },
+        { role: 'agent', intent: result.intent, invoked: result.invoked_agents },
+      ];
+
+      if (result.intent === 'clarify') {
+        setHistory((h) => [
+          ...h,
+          { role: 'agent', text: result.clarification ?? 'Could you clarify?', response: result, ts: Date.now() },
+        ]);
+        setSyncStatus('idle');
+        setSyncStage(null, null);
+        return;
+      }
+
+      if (result.error) {
+        setError(result.error);
+        setSyncStatus('error', result.error);
+        return;
+      }
+
+      if (result.design_operations.length) {
+        applyDesignPlanLocally({
+          selection: 'current',
+          operations: result.design_operations as never,
+        });
+      }
+
+      setHistory((h) => [
+        ...h,
+        {
+          role: 'agent',
+          text: result.notes.join(' • ') || `${result.invoked_agents.join(' → ')} complete`,
+          response: result,
+          ts: Date.now(),
         },
-      });
+      ]);
 
-      if (planResult.status !== 'success' || !planResult.plan) {
-        throw new Error(planResult.detail || 'AI planning failed');
+      if (result.execution_invocations.length) {
+        setSyncStage('execution', `Running ${result.execution_invocations.length} tool(s)`);
+        const apply = await applyDesignActions({
+          scene_graph: sceneGraph,
+          selection: {
+            ...selection,
+            metadata: (selection.metadata ?? {}) as never,
+          },
+          operations: result.design_operations as never,
+          material_options: useEditorStore.getState().materialOptions,
+          include_base: includeBase,
+          include_roof: includeRoof,
+        });
+        const paths: string[] = apply.export_paths || [];
+        const glb = paths.find((p) => p.endsWith('.glb'));
+        if (glb) {
+          const filename = glb.split('\\').pop()?.split('/').pop();
+          setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
+          bumpGlbVersion();
+        }
+        setSyncStatus(apply.status === 'success' ? 'synced' : 'error', apply.detail);
+        setSyncStage(null, null);
+      } else {
+        setSyncStatus('idle');
+        setSyncStage(null, null);
       }
-
-      setLastPlan(JSON.stringify(planResult.plan, null, 2));
-      applyDesignPlanLocally(planResult.plan);
-
-      const applyResult = await applyDesignActions({
-        scene_graph: sceneGraph,
-        selection,
-        operations: planResult.plan.operations,
-        material_options: useEditorStore.getState().materialOptions,
-        include_base: includeBase,
-        include_roof: includeRoof,
-      });
-
-      if (applyResult.status !== 'success') {
-        throw new Error(applyResult.detail || 'Blender sync failed');
-      }
-
-      const glbPath = (applyResult.export_paths || []).find((p: string) => p.endsWith('.glb'));
-      if (glbPath) {
-        const filename = glbPath.split('\\').pop()?.split('/').pop();
-        setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
-        bumpGlbVersion();
-      }
-      setSyncStatus('synced');
-    } catch (err: unknown) {
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       setSyncStatus('error', msg);
@@ -74,34 +170,66 @@ export const AIEditPanel: React.FC = () => {
   };
 
   return (
-    <div className="border-t border-gray-300 bg-white p-4">
-      <h3 className="mb-2 text-sm font-semibold text-gray-800">AI Design Assistant</h3>
-      <p className="mb-2 text-xs text-gray-500">
-        Describes changes as structured actions — never raw Blender Python.
-      </p>
+    <div className="flex flex-col gap-3 border-t border-gray-300 bg-white p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-800">Multi-Agent Design</h3>
+        <span className="text-[10px] uppercase tracking-wide text-gray-500">
+          orchestrator · design · geometry · execution
+        </span>
+      </div>
+
+      <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-gray-200 bg-gray-50 p-2 text-xs">
+        {history.length === 0 && (
+          <p className="text-gray-500">No conversation yet. Try: "Make this wall sage with stacked coils."</p>
+        )}
+        {history.map((turn, idx) => (
+          <div
+            key={idx}
+            className={`rounded px-2 py-1 ${
+              turn.role === 'user' ? 'bg-indigo-100 text-indigo-900' : 'bg-white text-gray-800'
+            }`}
+          >
+            <div className="text-[10px] uppercase opacity-70">{turn.role}</div>
+            <div>{turn.text}</div>
+            {turn.response && turn.response.invoked_agents.length > 0 && (
+              <div className="mt-1 text-[10px] text-gray-500">
+                agents: {turn.response.invoked_agents.join(' → ')}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
       <textarea
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder='e.g. "Make this region white with stacked coils"'
-        rows={3}
+        placeholder='e.g. "Curve this wall by 0.5m and bevel the edge"'
+        rows={2}
         className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+        disabled={!selection}
       />
       <button
         type="button"
-        onClick={runAIEdit}
-        disabled={loading || !getActiveSelection()}
-        className="mt-2 w-full rounded bg-violet-600 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+        onClick={sendPrompt}
+        disabled={loading || !selection || !prompt.trim()}
+        className="w-full rounded bg-violet-600 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
       >
-        {loading ? 'Planning & syncing…' : 'Apply AI edit'}
+        {loading ? 'Orchestrating…' : 'Send to agents'}
       </button>
-      {!getActiveSelection() && (
-        <p className="mt-2 text-xs text-amber-600">Select a region first.</p>
-      )}
-      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-      {lastPlan && (
-        <pre className="mt-3 max-h-32 overflow-auto rounded bg-gray-100 p-2 text-[10px] text-gray-700">
-          {lastPlan}
-        </pre>
+      {!selection && <p className="text-xs text-amber-600">Select a region first.</p>}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      {trace.length > 0 && (
+        <details className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] text-gray-700">
+          <summary className="cursor-pointer text-[11px] font-medium text-gray-700">
+            Recent agent trace ({trace.length})
+          </summary>
+          <div className="mt-1 max-h-32 overflow-y-auto space-y-0.5 font-mono">
+            {trace.slice(-12).map((entry) => (
+              <div key={entry.id}>{formatTrace(entry)}</div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );

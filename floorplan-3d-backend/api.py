@@ -95,6 +95,29 @@ class AIPlanRequest(BaseModel):
     prompt: str
     selection_summary: Optional[Dict[str, Any]] = None
 
+
+class AgentChatRequest(BaseModel):
+    prompt: str
+    selection: Dict[str, Any] = Field(default_factory=dict)
+    project_id: Optional[str] = None
+    conversation: Optional[List[Dict[str, Any]]] = None
+    available_patterns: Optional[List[str]] = None
+    available_materials: Optional[List[str]] = None
+
+
+class AgentChatResponse(BaseModel):
+    intent: str
+    invoked_agents: List[str] = Field(default_factory=list)
+    design_operations: List[Dict[str, Any]] = Field(default_factory=list)
+    geometry_tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_invocations: List[Dict[str, Any]] = Field(default_factory=list)
+    fallback_to_script: bool = False
+    clarification: Optional[str] = None
+    error: Optional[str] = None
+    notes: List[str] = Field(default_factory=list)
+    trace_ids: List[str] = Field(default_factory=list)
+    runner: Optional[Dict[str, Any]] = None
+
 @app.post("/api/upload")
 async def upload_image(
     file: UploadFile = File(...),
@@ -380,6 +403,75 @@ async def mcp_status():
     available = is_blender_mcp_available()
     info = ping() if available else None
     return {"available": available, "info": info}
+
+
+@app.post("/api/agent/chat")
+async def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
+    """Run the multi-agent orchestrator + execution runner for a user prompt."""
+    from agents import default_registry
+    from agents.orchestrator import Orchestrator
+    from agents.runner import run_invocations
+    from agents.trace import trace
+
+    registry = default_registry()
+    orchestrator = Orchestrator(registry)
+    entry = trace("api.agent_chat", project_id=req.project_id, prompt=req.prompt)
+    result = await orchestrator.run(
+        prompt=req.prompt,
+        selection=req.selection,
+        project_id=req.project_id,
+        conversation=req.conversation,
+        available_patterns=req.available_patterns,
+        available_materials=req.available_materials,
+    )
+
+    runner_payload: Optional[Dict[str, Any]] = None
+    if result.execution_invocations and not result.error:
+        project_name = (req.project_id or "building").replace(" ", "_")
+        runner_result = await run_invocations(
+            invocations=result.execution_invocations,
+            selection_payload=req.selection,
+            project_name=project_name,
+        )
+        runner_payload = {
+            "applied": runner_result.applied,
+            "deferred": runner_result.deferred,
+            "warnings": runner_result.warnings,
+            "fallback_to_script": runner_result.fallback_to_script,
+            "export_paths": runner_result.export_paths,
+        }
+        entry = trace(
+            "api.agent_chat.runner",
+            project_id=req.project_id,
+            applied=len(runner_result.applied),
+            deferred=len(runner_result.deferred),
+            warnings=runner_result.warnings,
+        )
+        result.trace_ids.append(entry["id"])
+        if runner_result.fallback_to_script:
+            result.fallback_to_script = True
+            result.notes.append("runner fell back to legacy script path")
+
+    return AgentChatResponse(
+        intent=result.intent,
+        invoked_agents=result.invoked_agents,
+        design_operations=result.design_operations,
+        geometry_tool_calls=result.geometry_tool_calls,
+        execution_invocations=result.execution_invocations,
+        fallback_to_script=result.fallback_to_script,
+        clarification=result.clarification,
+        error=result.error,
+        notes=result.notes,
+        trace_ids=result.trace_ids,
+        runner=runner_payload,
+    )
+
+
+@app.get("/api/agent/log")
+async def agent_log(project_id: Optional[str] = None, limit: int = 50):
+    from agents.trace import TRACE_LOG
+    items = TRACE_LOG.recent(project_id=project_id, limit=limit)
+    return {"items": items}
 
 
 @app.post("/api/design/ai-plan")

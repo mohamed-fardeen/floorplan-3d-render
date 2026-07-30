@@ -41,6 +41,10 @@ def _handle_command(cmd: dict) -> dict:
         return {"pong": True}
     if kind == "assign_region_material":
         return _assign_region_material(cmd)
+    if kind == "set_object_color":
+        return _set_object_color(cmd)
+    if kind == "set_object_pattern":
+        return _set_object_pattern(cmd)
     if kind == "export_glb":
         return _export_glb(cmd)
     if kind == "execute_code":
@@ -83,6 +87,111 @@ def _assign_region_material(cmd: dict) -> dict:
         obj.active_material_index = slot
         applied.append(obj.name)
     return {"ok": True, "applied": applied}
+
+
+def _set_object_color(cmd: dict) -> dict:
+    obj_name = cmd.get("object")
+    color_hex = cmd.get("color") or "#FFFFFF"
+    obj = bpy.data.objects.get(obj_name) if obj_name else None
+    if obj is None or obj.type != "MESH" or not obj.data:
+        return {"error": f"object not found: {obj_name!r}"}
+    if not (isinstance(color_hex, str) and len(color_hex) == 7 and color_hex.startswith("#")):
+        return {"error": f"invalid color: {color_hex!r}"}
+
+    mat_name = f"Color_{obj_name}"
+    if mat_name in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[mat_name])
+    mat = bpy.data.materials.new(name=mat_name)
+    mat.use_nodes = True
+    tree = mat.node_tree
+    for n in list(tree.nodes):
+        tree.nodes.remove(n)
+    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
+    out = tree.nodes.new("ShaderNodeOutputMaterial")
+    tree.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    r = int(color_hex[1:3], 16) / 255
+    g = int(color_hex[3:5], 16) / 255
+    b = int(color_hex[5:7], 16) / 255
+    bsdf.inputs["Base Color"].default_value = (r, g, b, 1.0)
+    mat.diffuse_color = (r, g, b, 1.0)
+
+    slot = -1
+    for i, m in enumerate(obj.data.materials):
+        if m is mat:
+            slot = i
+            break
+    if slot < 0:
+        obj.data.materials.append(mat)
+        slot = len(obj.data.materials) - 1
+    for poly in obj.data.polygons:
+        poly.material_index = slot
+    obj.active_material_index = slot
+    return {"ok": True, "material": mat_name}
+
+
+def _set_object_pattern(cmd: dict) -> dict:
+    obj_name = cmd.get("object")
+    pattern = cmd.get("pattern") or "none"
+    obj = bpy.data.objects.get(obj_name) if obj_name else None
+    if obj is None or obj.type != "MESH" or not obj.data:
+        return {"error": f"object not found: {obj_name!r}"}
+    if pattern not in {"none", "smooth", "stacked_coils", "woven_rope"}:
+        return {"error": f"unsupported pattern: {pattern!r}"}
+
+    mat_name = f"Pattern_{obj_name}_{pattern}"
+    if mat_name in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[mat_name])
+    mat = bpy.data.materials.new(name=mat_name)
+    mat.use_nodes = True
+    tree = mat.node_tree
+    for n in list(tree.nodes):
+        tree.nodes.remove(n)
+    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
+    out = tree.nodes.new("ShaderNodeOutputMaterial")
+    tree.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    bsdf.inputs["Base Color"].default_value = (0.84, 0.78, 0.71, 1.0)
+    mat.diffuse_color = (0.84, 0.78, 0.71, 1.0)
+
+    if pattern in {"stacked_coils", "woven_rope"}:
+        geo = tree.nodes.new("ShaderNodeNewGeometry")
+        sep = tree.nodes.new("ShaderNodeSeparateXYZ")
+        tree.links.new(geo.outputs["Position"], sep.inputs["Vector"])
+        scale = tree.nodes.new("ShaderNodeMath")
+        scale.operation = "MULTIPLY"
+        scale.inputs[1].default_value = 10.0
+        tree.links.new(sep.outputs["Z"], scale.inputs[0])
+        comb = tree.nodes.new("ShaderNodeCombineXYZ")
+        comb.inputs["X"].default_value = 0.0
+        comb.inputs["Y"].default_value = 0.0
+        tree.links.new(scale.outputs["Value"], comb.inputs["Z"])
+        wave = tree.nodes.new("ShaderNodeTexWave")
+        wave.wave_type = "BANDS"
+        wave.bands_direction = "Z"
+        wave.inputs["Scale"].default_value = 1.0
+        tree.links.new(comb.outputs["Vector"], wave.inputs["Vector"])
+        ramp = tree.nodes.new("ShaderNodeValToRGB")
+        ramp.color_ramp.elements[0].position = 0.40
+        ramp.color_ramp.elements.new(0.60)
+        ramp.color_ramp.elements[1].position = 0.60
+        tree.links.new(wave.outputs["Fac"], ramp.inputs["Fac"])
+        bump = tree.nodes.new("ShaderNodeBump")
+        bump.inputs["Strength"].default_value = 1.0
+        bump.inputs["Distance"].default_value = 0.045
+        tree.links.new(ramp.outputs["Color"], bump.inputs["Height"])
+        tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    slot = -1
+    for i, m in enumerate(obj.data.materials):
+        if m is mat:
+            slot = i
+            break
+    if slot < 0:
+        obj.data.materials.append(mat)
+        slot = len(obj.data.materials) - 1
+    for poly in obj.data.polygons:
+        poly.material_index = slot
+    obj.active_material_index = slot
+    return {"ok": True, "material": mat_name, "pattern": pattern}
 
 
 def _export_glb(cmd: dict) -> dict:
