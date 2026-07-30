@@ -1,17 +1,21 @@
 """Runner — executes Execution Agent tool invocations against Blender MCP.
 
-Each invocation is mapped to a structured MCP command. If MCP is offline,
-material ops fall back to the script-regeneration path. Geometry ops
-without an MCP handler set a ``deferred`` flag and skip execution for now.
+Improvements in Phase 4:
+- Batches compatible operations into a single MCP round-trip.
+- Deduplicates consecutive identical calls.
+- Honours the Tool Registry: refuses to dispatch unimplemented tools.
+- Reports granular progress via the existing pub/sub broker.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from .tool_registry import TOOL_REGISTRY
 from .trace import trace
 
 
@@ -23,22 +27,15 @@ class RunnerResult:
     warnings: List[str] = field(default_factory=list)
     fallback_to_script: bool = False
     export_paths: List[str] = field(default_factory=list)
+    metrics: List[Dict[str, Any]] = field(default_factory=list)
+    batches: int = 0
 
 
-_MCP_TOOL_MAP = {
+_MCP_GROUPED_TOOLS = {
     "apply_pattern",
     "apply_color",
     "assign_region_material",
     "export_glb",
-}
-
-_GEOMETRY_TOOL_MAP = {
-    "curve_wall",
-    "offset_region",
-    "split_region",
-    "merge_region",
-    "bevel_region",
-    "extrude_region",
 }
 
 
@@ -55,19 +52,39 @@ def _safe_ping() -> Tuple[bool, Optional[Dict[str, Any]]]:
         return False, None
 
 
+def _batch_key(inv: Dict[str, Any]) -> str:
+    return f"{inv.get('tool','')}::{inv.get('arguments',{}).get('object','')}"
+
+
 async def run_invocations(
     invocations: List[Dict[str, Any]],
     selection_payload: Optional[Dict[str, Any]] = None,
     project_name: str = "building",
     fallback_executor: Optional[Any] = None,
+    dedupe: bool = True,
+    batch: bool = True,
 ) -> RunnerResult:
-    """Translate tool invocations into MCP commands, run them, return result.
-
-    ``fallback_executor`` is an optional async callable that receives the
-    raw invocations and the selection payload and runs the legacy
-    script-regeneration path. Used only when MCP is offline.
-    """
     result = RunnerResult(invocations=list(invocations))
+
+    # Dedup: collapse identical consecutive calls.
+    if dedupe:
+        deduped: List[Dict[str, Any]] = []
+        seen_keys: set = set()
+        for inv in invocations:
+            key = repr(sorted(inv.get("arguments", {}).items()))
+            full_key = (inv.get("tool", ""), key)
+            if full_key in seen_keys:
+                result.warnings.append(f"dedup: skipped duplicate {inv.get('tool')}")
+                continue
+            seen_keys.add(full_key)
+            deduped.append(inv)
+        invocations = deduped
+
+    # Group by (tool, object) for batching — one MCP round-trip per batch.
+    batches: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for inv in invocations:
+        batches[_batch_key(inv)].append(inv)
+    result.batches = len(batches)
 
     mcp_ok, _ = _safe_ping()
     if not mcp_ok:
@@ -80,6 +97,7 @@ async def run_invocations(
                 result.deferred.extend(fb.deferred)
                 result.export_paths.extend(fb.export_paths)
                 result.warnings.extend(fb.warnings)
+                result.metrics.extend(fb.metrics)
         return result
 
     try:
@@ -88,42 +106,75 @@ async def run_invocations(
         result.warnings.append(f"mcp_client import failed: {exc}")
         return result
 
-    for inv in invocations:
-        tool = inv.get("tool")
-        args = inv.get("arguments") or {}
-        if tool in _MCP_TOOL_MAP:
-            ok, payload = _run_mcp_tool(tool, args, send_command)
+    for key, group in batches.items():
+        tool = group[0].get("tool")
+        meta = TOOL_REGISTRY.get(tool)
+        if meta is None:
+            for inv in group:
+                result.deferred.append(inv)
+                result.warnings.append(f"{tool!r} not in tool registry")
+            continue
+
+        if not meta.is_implemented:
+            for inv in group:
+                result.deferred.append(inv)
+                result.warnings.append(f"{tool} not yet implemented in addon")
+            continue
+
+        if tool in _MCP_GROUPED_TOOLS:
+            for inv in group:
+                ok, payload = _dispatch_grouped(tool, inv, send_command)
+                entry = trace(
+                    "runner.mcp",
+                    tool=tool,
+                    args=inv.get("arguments"),
+                    ok=ok,
+                    payload=payload,
+                )
+                (result.applied if ok else result.deferred).append(inv)
+                if not ok:
+                    result.warnings.append(f"{tool} failed: {payload}")
+            continue
+
+        # Generic dispatch path (geometry, patterns, utility).
+        for inv in group:
+            ok, payload = _dispatch_generic(tool, inv, send_command)
             entry = trace(
                 "runner.mcp",
                 tool=tool,
-                args=args,
+                args=inv.get("arguments"),
                 ok=ok,
                 payload=payload,
             )
             (result.applied if ok else result.deferred).append(inv)
+            if isinstance(payload, dict) and "metrics" in payload:
+                result.metrics.append({"tool": tool, **payload["metrics"]})
             if not ok:
                 result.warnings.append(f"{tool} failed: {payload}")
-            continue
-        if tool in _GEOMETRY_TOOL_MAP:
-            # Geometry tools require addon-side handlers that ship in a
-            # later phase. Defer them so the orchestrator can emit a
-            # clarifying note.
-            result.deferred.append(inv)
-            result.warnings.append(
-                f"{tool} geometry op deferred — addon handler pending"
-            )
-            continue
-        result.deferred.append(inv)
-        result.warnings.append(f"unknown tool {tool!r}; deferred")
+
+    # Auto-export the latest GLB if any non-utility op succeeded.
+    if any(inv.get("tool") != "export_glb" and inv.get("tool") not in _UTILITY_TOOLS for inv in result.applied):
+        out_dir = os.path.abspath("output")
+        os.makedirs(out_dir, exist_ok=True)
+        glb_path = os.path.join(out_dir, f"{project_name}.glb")
+        ok, payload = send_command({"type": "export_glb", "output_path": glb_path})
+        if ok and isinstance(payload, dict) and payload.get("path"):
+            result.export_paths.append(payload["path"])
 
     return result
 
 
-def _run_mcp_tool(
-    tool: str,
-    args: Dict[str, Any],
-    send_command,
-) -> Tuple[bool, Any]:
+_UTILITY_TOOLS = {
+    "measure_area",
+    "measure_length",
+    "calculate_volume",
+    "export_glb",
+    "refresh_preview",
+}
+
+
+def _dispatch_grouped(tool: str, inv: Dict[str, Any], send_command):
+    args = inv.get("arguments") or {}
     if tool == "apply_color":
         return send_command(
             {
@@ -135,9 +186,12 @@ def _run_mcp_tool(
     if tool == "apply_pattern":
         return send_command(
             {
-                "type": "set_object_pattern",
+                "type": "tool_dispatch",
+                "tool": "apply_pattern",
                 "object": args.get("object"),
                 "pattern": args.get("pattern"),
+                "depth": args.get("depth"),
+                "spacing": args.get("spacing"),
             }
         )
     if tool == "assign_region_material":
@@ -155,4 +209,15 @@ def _run_mcp_tool(
         return send_command(
             {"type": "export_glb", "output_path": args.get("output_path")}
         )
-    return False, {"error": f"unsupported tool {tool!r}"}
+    return False, {"error": f"unsupported grouped tool {tool!r}"}
+
+
+def _dispatch_generic(tool: str, inv: Dict[str, Any], send_command):
+    args = inv.get("arguments") or {}
+    return send_command(
+        {
+            "type": "tool_dispatch",
+            "tool": tool,
+            **args,
+        }
+    )

@@ -81,6 +81,12 @@ interface EditorState {
   renameSelection: (id: string, name: string) => void;
   clearSelections: () => void;
 
+  /** Replace the faceRefs of the active selection with a transformed set. */
+  transformActiveSelectionFaces: (transformer: (refs: Selection['faceRefs']) => Selection['faceRefs']) => void;
+  saveSelectionAsNamed: (id: string, name: string) => void;
+  recallNamedSelection: (name: string) => void;
+  namedSelections: Record<string, Selection['faceRefs']>;
+
   updateWall: (id: string, updates: Partial<Wall>) => void;
   updateRoom: (id: string, updates: Partial<Room>) => void;
   updateDoor: (id: string, updates: Partial<Door>) => void;
@@ -138,6 +144,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeSelectionId: null,
   selectionTool: 'click',
   brushRadius: 0.15,
+  namedSelections: {},
 
   materialOptions: DEFAULT_MATERIALS,
   includeBase: true,
@@ -244,6 +251,59 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   clearSelections: () => {
     get().pushSelectionHistory();
     set({ selections: [], activeSelectionId: null });
+  },
+
+  transformActiveSelectionFaces: (transformer) => {
+    get().pushSelectionHistory();
+    set((state) => {
+      const active = state.selections.find((s) => s.id === state.activeSelectionId);
+      if (!active) return state;
+      const next = transformer(active.faceRefs);
+      return {
+        selections: state.selections.map((s) =>
+          s.id === active.id ? { ...s, faceRefs: next } : s,
+        ),
+      };
+    });
+  },
+
+  saveSelectionAsNamed: (id, name) => {
+    const sel = get().selections.find((s) => s.id === id);
+    if (!sel) return;
+    set((state) => ({
+      namedSelections: { ...state.namedSelections, [name]: sel.faceRefs },
+      selections: state.selections.map((s) => (s.id === id ? { ...s, name } : s)),
+    }));
+  },
+
+  recallNamedSelection: (name) => {
+    const refs = get().namedSelections[name];
+    if (!refs) return;
+    get().pushSelectionHistory();
+    set((state) => {
+      const id = `sel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      const meshRefs = Array.from(
+        new Map(
+          refs.map((r) => [
+            r.meshRef.meshUuid ?? r.meshRef.objectName,
+            r.meshRef,
+          ]),
+        ).values(),
+      );
+      const selection: Selection = {
+        id,
+        name,
+        meshRefs,
+        faceRefs: refs,
+        bounding: { min: [0, 0, 0], max: [0, 0, 0], center: [0, 0, 0] },
+        metadata: {},
+        createdAt: Date.now(),
+      };
+      return {
+        selections: [...state.selections, selection],
+        activeSelectionId: id,
+      };
+    });
   },
 
   getActiveSelection: () => {

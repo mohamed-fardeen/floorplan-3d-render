@@ -49,6 +49,13 @@ def _handle_command(cmd: dict) -> dict:
         return _export_glb(cmd)
     if kind == "execute_code":
         return _execute_code(cmd)
+    if kind == "tool_dispatch":
+        # Generic dispatch through geometry_handlers.py / patterns / etc.
+        try:
+            from . import geometry_handlers as _gh
+        except ImportError:  # in-tree addons use absolute import
+            import geometry_handlers as _gh  # type: ignore
+        return _gh.dispatch(cmd.get("tool", ""), cmd)
     return {"error": f"unknown command type: {kind!r}"}
 
 

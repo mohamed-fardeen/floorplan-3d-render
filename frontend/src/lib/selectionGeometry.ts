@@ -251,3 +251,234 @@ export function createSelectionFromFaces(
 export function disposeHighlightGeometry(geometry: THREE.BufferGeometry | null) {
   if (geometry) geometry.dispose();
 }
+
+/**
+ * Grow a face set by including every face that shares an edge with the
+ * current set, repeated up to ``iterations`` times.
+ */
+export function growFaces(
+  root: THREE.Object3D,
+  faces: FaceReference[],
+  iterations = 1,
+): FaceReference[] {
+  if (iterations <= 0 || faces.length === 0) return faces;
+  const grouped = groupFacesByMesh(faces);
+  const out: FaceReference[] = [];
+  for (const [key, list] of grouped.entries()) {
+    const mesh = findMesh(root, key);
+    if (!mesh || !mesh.geometry) {
+      out.push(...list);
+      continue;
+    }
+    const idx = mesh.geometry.getIndex();
+    if (!idx) {
+      out.push(...list);
+      continue;
+    }
+    const current = new Set<number>(list.map((f) => f.faceIndex));
+    for (let it = 0; it < iterations; it++) {
+      const vertexBag = new Set<number>();
+      for (const fi of current) {
+        vertexBag.add(idx.getX(fi * 3));
+        vertexBag.add(idx.getX(fi * 3 + 1));
+        vertexBag.add(idx.getX(fi * 3 + 2));
+      }
+      const faceCount = idx.count / 3;
+      for (let fi = 0; fi < faceCount; fi++) {
+        if (current.has(fi)) continue;
+        if (
+          vertexBag.has(idx.getX(fi * 3)) ||
+          vertexBag.has(idx.getX(fi * 3 + 1)) ||
+          vertexBag.has(idx.getX(fi * 3 + 2))
+        ) {
+          current.add(fi);
+        }
+      }
+    }
+    for (const fi of current) {
+      out.push({
+        meshRef: list[0].meshRef,
+        faceIndex: fi,
+      });
+    }
+  }
+  return out;
+}
+
+/** Shrink by removing border faces (faces with at least one unselected neighbour). */
+export function shrinkFaces(
+  root: THREE.Object3D,
+  faces: FaceReference[],
+  iterations = 1,
+): FaceReference[] {
+  if (iterations <= 0 || faces.length === 0) return faces;
+  const grouped = groupFacesByMesh(faces);
+  const out: FaceReference[] = [];
+  for (const [key, list] of grouped.entries()) {
+    const mesh = findMesh(root, key);
+    if (!mesh || !mesh.geometry) {
+      out.push(...list);
+      continue;
+    }
+    const idx = mesh.geometry.getIndex();
+    if (!idx) {
+      out.push(...list);
+      continue;
+    }
+    const current = new Set<number>(list.map((f) => f.faceIndex));
+    for (let it = 0; it < iterations; it++) {
+      const border = new Set<number>();
+      const faceCount = idx.count / 3;
+      for (let fi = 0; fi < faceCount; fi++) {
+        if (!current.has(fi)) continue;
+        const v0 = idx.getX(fi * 3);
+        const v1 = idx.getX(fi * 3 + 1);
+        const v2 = idx.getX(fi * 3 + 2);
+        let has_outside_neighbour = false;
+        for (let fj = 0; fj < faceCount; fj++) {
+          if (current.has(fj)) continue;
+          if (
+            idx.getX(fj * 3) === v0 || idx.getX(fj * 3 + 1) === v0 || idx.getX(fj * 3 + 2) === v0 ||
+            idx.getX(fj * 3) === v1 || idx.getX(fj * 3 + 1) === v1 || idx.getX(fj * 3 + 2) === v1 ||
+            idx.getX(fj * 3) === v2 || idx.getX(fj * 3 + 1) === v2 || idx.getX(fj * 3 + 2) === v2
+          ) {
+            has_outside_neighbour = true;
+            break;
+          }
+        }
+        if (has_outside_neighbour) border.add(fi);
+      }
+      for (const b of border) current.delete(b);
+    }
+    for (const fi of current) {
+      out.push({
+        meshRef: list[0].meshRef,
+        faceIndex: fi,
+      });
+    }
+  }
+  return out;
+}
+
+/** Return every face of every mesh the current selection touches, then subtract the selection. */
+export function invertFaces(
+  root: THREE.Object3D,
+  faces: FaceReference[],
+): FaceReference[] {
+  const excluded = groupFacesByMesh(faces);
+  const out: FaceReference[] = [];
+  root.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
+    const mesh = child as THREE.Mesh;
+    if (!mesh.geometry) return;
+    const pos = mesh.geometry.getAttribute('position');
+    const idx = mesh.geometry.getIndex();
+    const faceCount = idx ? idx.count / 3 : pos.count / 3;
+    const key = mesh.uuid;
+    const excludeSet = new Set((excluded.get(key) ?? []).map((r) => r.faceIndex));
+    for (let fi = 0; fi < faceCount; fi++) {
+      if (excludeSet.has(fi)) continue;
+      out.push({
+        meshRef: { objectName: meshObjectName(mesh), meshUuid: mesh.uuid },
+        faceIndex: fi,
+      });
+    }
+  });
+  return out;
+}
+
+/** Expand to all faces of all meshes referenced in the selection. */
+export function expandToMeshFaces(
+  root: THREE.Object3D,
+  faces: FaceReference[],
+): FaceReference[] {
+  const grouped = groupFacesByMesh(faces);
+  const out: FaceReference[] = [];
+  for (const [key] of grouped.entries()) {
+    const mesh = findMesh(root, key);
+    if (!mesh || !mesh.geometry) continue;
+    const pos = mesh.geometry.getAttribute('position');
+    const idx = mesh.geometry.getIndex();
+    const faceCount = idx ? idx.count / 3 : pos.count / 3;
+    for (let fi = 0; fi < faceCount; fi++) {
+      out.push({
+        meshRef: { objectName: meshObjectName(mesh), meshUuid: mesh.uuid },
+        faceIndex: fi,
+      });
+    }
+  }
+  return out;
+}
+
+/** Find every face connected to the active faces via shared edges. */
+export function connectedFaces(
+  root: THREE.Object3D,
+  faces: FaceReference[],
+): FaceReference[] {
+  const grouped = groupFacesByMesh(faces);
+  const out: FaceReference[] = [];
+  for (const [key, list] of grouped.entries()) {
+    const mesh = findMesh(root, key);
+    if (!mesh || !mesh.geometry) {
+      out.push(...list);
+      continue;
+    }
+    const idx = mesh.geometry.getIndex();
+    if (!idx) {
+      out.push(...list);
+      continue;
+    }
+    const seeds = new Set(list.map((f) => f.faceIndex));
+    const touched = new Set<number>();
+    const stack = [...seeds];
+    while (stack.length) {
+      const fi = stack.pop()!;
+      if (touched.has(fi)) continue;
+      touched.add(fi);
+      const i0 = idx.getX(fi * 3);
+      const i1 = idx.getX(fi * 3 + 1);
+      const i2 = idx.getX(fi * 3 + 2);
+      const verts = new Set([i0, i1, i2]);
+      for (let i = 0; i < idx.count; i += 3) {
+        const fj = i / 3;
+        if (touched.has(fj)) continue;
+        const j0 = idx.getX(i);
+        const j1 = idx.getX(i + 1);
+        const j2 = idx.getX(i + 2);
+        if (verts.has(j0) || verts.has(j1) || verts.has(j2)) {
+          stack.push(fj);
+        }
+      }
+    }
+    for (const fi of touched) {
+      out.push({
+        meshRef: list[0].meshRef,
+        faceIndex: fi,
+      });
+    }
+  }
+  return out;
+}
+
+// ── Internal helpers ────────────────────────────────────────────────
+
+function groupFacesByMesh(faces: FaceReference[]): Map<string, FaceReference[]> {
+  const grouped = new Map<string, FaceReference[]>();
+  for (const f of faces) {
+    const key = f.meshRef.meshUuid ?? f.meshRef.objectName;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(f);
+  }
+  return grouped;
+}
+
+function findMesh(root: THREE.Object3D, key: string): THREE.Mesh | null {
+  let result: THREE.Mesh | null = null;
+  root.traverse((child) => {
+    if (result) return;
+    if (!(child as THREE.Mesh).isMesh) return;
+    const mesh = child as THREE.Mesh;
+    if (mesh.uuid === key || mesh.name === key) result = mesh;
+  });
+  return result;
+}

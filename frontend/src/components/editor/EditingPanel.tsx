@@ -2,8 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
 import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
 import { applyDesignActions, openDesignStream } from '../../api/client';
+import { MetricsPanel } from './MetricsPanel';
+import * as THREE from 'three';
 
-export const EditingPanel: React.FC = () => {
+interface EditingPanelProps {
+  glbRoot?: THREE.Group | null;
+}
+
+export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null }) => {
   const {
     getActiveSelection,
     updateSelectionMetadata,
@@ -108,6 +114,8 @@ export const EditingPanel: React.FC = () => {
           {selection.faceRefs.length} faces · {selection.meshRefs.length} meshes
         </p>
       </div>
+
+      <MetricsPanel glbRoot={glbRoot} />
 
       <div className="flex-1 space-y-6 overflow-y-auto p-4">
         <section>

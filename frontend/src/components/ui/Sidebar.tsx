@@ -7,14 +7,23 @@ import {
   launchBlenderMcp,
 } from '../../api/client';
 import { SelectionToolbar } from '../editor/SelectionToolbar';
+import { SelectionActions } from '../editor/SelectionActions';
+import { MetricsPanel } from '../editor/MetricsPanel';
 import { AIEditPanel } from '../editor/AIEditPanel';
 import { ArrowLeft } from 'lucide-react';
+import * as THREE from 'three';
+
+interface SidebarProps {
+  onBackToHome: () => void;
+  glbRoot: THREE.Group | null;
+  onSelectionTransform: (name: 'grow' | 'shrink' | 'invert' | 'connected' | 'expandToMesh') => void;
+}
 
 interface SidebarProps {
   onBackToHome: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelectionTransform }) => {
   const {
     undo,
     redo,
@@ -125,6 +134,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome }) => {
       </div>
 
       <SelectionToolbar />
+
+      <SelectionActions
+        onGrow={() => onSelectionTransform('grow')}
+        onShrink={() => onSelectionTransform('shrink')}
+        onInvert={() => onSelectionTransform('invert')}
+        onConnected={() => onSelectionTransform('connected')}
+        onExpandToMesh={() => onSelectionTransform('expandToMesh')}
+      />
+
+      <MetricsPanel glbRoot={glbRoot} />
 
       <div className="grid grid-cols-2 gap-2 border-b border-gray-300 p-4">
         <button

@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Grid, useGLTF, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useEditorStore } from '../../store/editorStore';
@@ -67,11 +67,22 @@ const SelectionHighlight: React.FC<SelectionLayerProps> = ({ root, faceRefs }) =
     return buildHighlightGeometry(root, faceRefs);
   }, [root, faceRefs]);
 
+  const t = useRef(0);
+  useFrame((_, delta) => {
+    t.current = (t.current + delta) % 1;
+    if (materialRef.current) {
+      materialRef.current.opacity = 0.35 + 0.2 * Math.sin(t.current * Math.PI * 2);
+    }
+  });
+
+  const materialRef = useRef<THREE.MeshBasicMaterial>(null);
+
   if (!geometry) return null;
 
   return (
     <mesh geometry={geometry} renderOrder={10}>
       <meshBasicMaterial
+        ref={materialRef}
         color={HIGHLIGHT_COLOR}
         transparent
         opacity={0.45}
@@ -448,11 +459,20 @@ const LassoOverlay: React.FC<LassoOverlayProps> = ({ root, disabled }) => {
 interface SceneContentProps {
   glbUrl: string;
   version: number;
+  onRoot?: (g: THREE.Group) => void;
 }
 
-const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version }) => {
+const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version, onRoot }) => {
   const [root, setRoot] = useState<THREE.Group | null>(null);
   const { viewport } = useEditorStore();
+
+  const handleRoot = useCallback(
+    (g: THREE.Group) => {
+      setRoot(g);
+      onRoot?.(g);
+    },
+    [onRoot],
+  );
 
   return (
     <>
@@ -475,7 +495,7 @@ const SceneContent: React.FC<SceneContentProps> = ({ glbUrl, version }) => {
       {viewport.showAxes && (import.meta.env.DEV || true) && <axesHelper args={[2]} />}
 
       <Suspense fallback={null}>
-        <BuildingModel url={glbUrl} version={version} onSceneReady={setRoot} />
+        <BuildingModel url={glbUrl} version={version} onSceneReady={handleRoot} />
       </Suspense>
 
       <PickHandler root={root} disabled={false} />
@@ -499,12 +519,14 @@ interface ConstructionViewportProps {
   className?: string;
   glbUrl?: string | null;
   sceneGraph?: SceneGraph | null;
+  onRoot?: (g: THREE.Group | null) => void;
 }
 
 export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
   className = '',
   glbUrl: glbUrlProp,
   sceneGraph: sceneGraphProp,
+  onRoot,
 }) => {
   const store = useEditorStore();
   const glbUrl = glbUrlProp ?? store.glbUrl;
@@ -584,7 +606,7 @@ export const ConstructionViewport: React.FC<ConstructionViewportProps> = ({
           camera.lookAt(0, 1.5, 0);
         }}
       >
-        <SceneContent glbUrl={glbUrl} version={glbVersion} />
+        <SceneContent glbUrl={glbUrl} version={glbVersion} onRoot={onRoot} />
         <CameraResetListener />
       </Canvas>
     </div>

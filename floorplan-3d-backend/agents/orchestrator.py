@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import Agent, AgentRequest, AgentResponse
 from .registry import AgentRegistry
+from .rules import validate_invocations, validate_selection
 from .trace import trace
 from .validation import (
     validate_design_operations,
@@ -50,6 +51,7 @@ class OrchestratorResult:
     error: Optional[str] = None
     notes: List[str] = field(default_factory=list)
     trace_ids: List[str] = field(default_factory=list)
+    rule_report: Optional[Dict[str, Any]] = None
 
 
 _DESIGN_HINTS = {"color", "colour", "pattern", "paint", "tint", "shade", "white", "navy", "sage"}
@@ -260,6 +262,28 @@ class Orchestrator:
             design_ops=len(result.design_operations),
             geometry_calls=len(result.geometry_tool_calls),
             invocations=len(result.execution_invocations),
+        )
+        result.trace_ids.append(entry["id"])
+
+        # Construction rules pass — last gate before the runner.
+        rule_report = validate_invocations(result.execution_invocations, selection)
+        rule_report_dict = rule_report.to_dict()
+        result.rule_report = rule_report_dict
+        if not rule_report.ok:
+            errors = [v for v in rule_report.violations if v.severity == "error"]
+            result.error = "rule_violation: " + "; ".join(v.message for v in errors)
+            entry = trace(
+                "rules.failed",
+                project_id=project_id,
+                errors=[v.message for v in errors],
+            )
+            result.trace_ids.append(entry["id"])
+            return result
+
+        entry = trace(
+            "rules.passed",
+            project_id=project_id,
+            warnings=[v.message for v in rule_report.violations if v.severity == "warning"],
         )
         result.trace_ids.append(entry["id"])
         return result
