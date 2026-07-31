@@ -5,7 +5,6 @@ import {
   exportBlender,
   getBlenderMcpInfo,
   getBlenderMcpLog,
-  getBlenderMcpStatus,
   launchBlenderMcp,
 } from '../../api/client';
 import { SelectionToolbar } from '../editor/SelectionToolbar';
@@ -19,10 +18,11 @@ import * as THREE from 'three';
 interface SidebarProps {
   onBackToHome: () => void;
   glbRoot: THREE.Group | null;
+  mcpAvailable: boolean;
   onSelectionTransform: (name: 'grow' | 'shrink' | 'invert' | 'connected' | 'expandToMesh') => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelectionTransform }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, mcpAvailable, onSelectionTransform }) => {
   const {
     undo,
     redo,
@@ -44,7 +44,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
   } = useEditorStore();
 
   const [syncing, setSyncing] = useState(false);
-  const [mcpAvailable, setMcpAvailable] = useState(false);
   const [launchingMcp, setLaunchingMcp] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpLog, setMcpLog] = useState<string>('');
@@ -55,21 +54,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
     let cancelled = false;
     const probe = async () => {
       try {
-        const [status, info, log] = await Promise.all([
-          getBlenderMcpStatus(),
+        const [info, log] = await Promise.all([
           getBlenderMcpInfo(),
           getBlenderMcpLog(),
         ]);
         if (cancelled) return;
-        setMcpAvailable(status.available);
         setBlenderPath(info.blender_executable);
         setMcpLog(log);
       } catch {
-        if (!cancelled) setMcpAvailable(false);
+        /* ignore */
       }
     };
     probe();
-    const handle = window.setInterval(probe, 3000);
+    const handle = window.setInterval(probe, 4000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
@@ -83,26 +80,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
       const res = await launchBlenderMcp();
       if (res.status === 'error') {
         setMcpError(res.detail || 'Unknown launch error');
-      } else {
-        // Poll for up to 8 s waiting for the socket to come up.
-        const startedAt = Date.now();
-        const wait = async () => {
-          const status = await getBlenderMcpStatus();
-          setMcpAvailable(status.available);
-          if (status.available) {
-            const log = await getBlenderMcpLog();
-            setMcpLog(log);
-            return;
-          }
-          if (Date.now() - startedAt < 8000) {
-            window.setTimeout(wait, 600);
-          } else {
-            const log = await getBlenderMcpLog();
-            setMcpLog(log);
-            setMcpError('Blender started but MCP socket did not respond on :9876.');
-          }
-        };
-        wait();
+      } else if (res.log) {
+        setMcpLog(res.log);
       }
     } catch (err) {
       setMcpError(err instanceof Error ? err.message : String(err));

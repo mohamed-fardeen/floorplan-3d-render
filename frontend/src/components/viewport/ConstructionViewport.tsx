@@ -665,12 +665,55 @@ const CameraResetListener: React.FC = () => {
 
 const ViewportHint: React.FC = () => {
   const { viewport } = useEditorStore();
-  const hint =
+  const mcpAvailable = useMcpConnectionSafe();
+  const interactionHint =
     viewport.interactionMode === 'orbit'
       ? '🖱 Left-drag: rotate · Right-drag: pan · Scroll: zoom'
       : '🖱 Left-click: pick · Right-drag: rotate · Scroll: zoom';
-  return <span className="rounded bg-black/40 px-2 py-1 text-[10px] text-white/80">{hint}</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="rounded bg-black/40 px-2 py-1 text-[10px] text-white/80">
+        {interactionHint}
+      </span>
+      <span
+        className={`rounded px-2 py-1 text-[10px] ${
+          mcpAvailable
+            ? 'bg-emerald-600/80 text-white'
+            : 'bg-amber-500/80 text-white'
+        }`}
+        title={mcpAvailable ? 'Live MCP is connected' : 'Waiting for Blender MCP socket'}
+      >
+        {mcpAvailable ? '● MCP live' : '○ MCP auto-connecting…'}
+      </span>
+    </div>
+  );
 };
+
+function useMcpConnectionSafe() {
+  // Inline mini-hook to avoid circular imports.
+  // The App-level hook is the authoritative one; this just reads
+  // /api/mcp/status directly for the HUD.
+  const [available, setAvailable] = React.useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/mcp/status');
+        const data = await res.json();
+        if (!cancelled) setAvailable(Boolean(data?.available));
+      } catch {
+        /* ignore */
+      }
+    };
+    tick();
+    const handle = window.setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
+  return available;
+}
 
 const ViewportMenu: React.FC = () => {
   const { viewport, setViewportOptions } = useEditorStore();

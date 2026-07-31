@@ -6,7 +6,7 @@ import { SceneSummary } from '../components/SceneSummary';
 import { ConstructionViewport } from '../components/viewport/ConstructionViewport';
 import { DownloadPanel } from '../components/DownloadPanel';
 import { AnnotatedFloorplan } from '../components/AnnotatedFloorplan';
-import { uploadAndParse, exportBlender } from '../api/client';
+import { uploadAndParse, exportBlender, launchBlenderMcp } from '../api/client';
 import type { MaterialOptions } from '../api/client';
 import type { SceneGraph } from '../types/schema';
 import { AnnotationPage } from './AnnotationPage';
@@ -130,9 +130,24 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
     setOpeningBlender(true);
     setError(undefined);
     try {
+      const launchRes = await launchBlenderMcp();
       const exportResult = await exportBlender(sceneGraph, includeBase, includeRoof, materialOptions, true);
       if (exportResult.status !== 'success') {
         throw new Error(exportResult.detail || 'Failed to open Blender.');
+      }
+      // Open the web editor immediately — MCP connection is detected by the
+      // editor's polling, so users see "Live MCP" turn green within a few seconds.
+      onOpenEditor(sceneGraph, {
+        glbUrl,
+        materialOptions,
+        includeBase,
+        includeRoof,
+      });
+      if (launchRes.status === 'error') {
+        setError(
+          launchRes.detail ||
+          'Blender not launched — opening the web editor only. Use Sync to Blender to re-run the headless export.',
+        );
       }
     } catch (err: any) {
       console.error(err);
@@ -222,29 +237,20 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       {sceneGraph && stage === 'complete' && (
         <div className="w-full max-w-2xl mx-auto mt-4 flex flex-col gap-3">
           <button
-            onClick={() =>
-              onOpenEditor(sceneGraph, {
-                glbUrl,
-                materialOptions,
-                includeBase,
-                includeRoof,
-              })
-            }
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
-          >
-            Open 3D Construction Editor →
-          </button>
-          
-          <button
             onClick={handleOpenInBlender}
             disabled={openingBlender}
-            className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
             </svg>
-            {openingBlender ? 'Opening Blender…' : 'Open in Blender'}
+            {openingBlender ? 'Launching Blender + Editor…' : 'Open 3D Construction Editor'}
           </button>
+          <p className="text-center text-xs text-gray-500">
+            Launches Blender with the MCP addon preloaded, exports the .blend,
+            then opens the web editor. If Blender is not installed, only the
+            web editor opens and the headless GLB export is used.
+          </p>
         </div>
       )}
 
