@@ -24,7 +24,12 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
   const renameSelection = useEditorStore((s) => s.renameSelection);
 
   const selection = getActiveSelection();
+  const setWallColorOverride = useEditorStore((s) => s.setWallColorOverride);
   const [tab, setTab] = useState<Tab>('design');
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [appliedPreset, setAppliedPreset] = useState(false);
+  const [appliedColor, setAppliedColor] = useState(false);
+  const [appliedPattern, setAppliedPattern] = useState(false);
 
   if (!selection) {
     return (
@@ -130,10 +135,23 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             </div>
             <button
               type="button"
-              onClick={() => applyLocal([{ type: 'set_color', value: color }])}
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+              onClick={() => {
+                applyLocal([{ type: 'set_color', value: color }]);
+                for (const meshRef of selection.meshRefs) {
+                  if (meshRef.objectName && meshRef.objectName.startsWith('Wall_')) {
+                    setWallColorOverride(meshRef.objectName, { color });
+                  }
+                }
+                setAppliedColor(true);
+                setTimeout(() => setAppliedColor(false), 2000);
+              }}
+              className={`mt-2 w-full rounded py-2 text-sm font-medium transition-colors ${
+                appliedColor
+                  ? 'bg-green-600 text-white'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
             >
-              Apply
+              {appliedColor ? '✓ Applied!' : 'Apply'}
             </button>
             <p className="mt-1.5 text-[10px] text-gray-500">
               Saved to the current session only.
@@ -147,40 +165,67 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
               Material preset
             </h3>
             <div className="grid grid-cols-1 gap-1">
-              {MATERIAL_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => {
-                    updateSelectionMetadata(selection.id, {
-                      materialPreset: preset.id,
-                      color: preset.color,
-                      pattern: preset.pattern,
-                    });
-                  }}
-                  className="flex w-full items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1.5 text-left hover:border-indigo-300"
-                >
-                  <span
-                    className="h-5 w-5 shrink-0 rounded border border-black/10"
-                    style={{ backgroundColor: preset.color }}
-                  />
-                  <span className="flex-1 text-xs text-gray-800">{preset.name}</span>
-                  <span className="text-[10px] uppercase text-gray-400">{preset.pattern}</span>
-                </button>
-              ))}
+              {MATERIAL_PRESETS.map((preset) => {
+                const isSelected = (selectedPresetId ?? selection.metadata.materialPreset) === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setSelectedPresetId(preset.id)}
+                    className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left transition ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-50/50 ring-1 ring-indigo-500'
+                        : 'border-gray-200 bg-white hover:border-indigo-300'
+                    }`}
+                  >
+                    <span
+                      className="h-5 w-5 shrink-0 rounded border border-black/10"
+                      style={{ backgroundColor: preset.color }}
+                    />
+                    <span className="flex-1 text-xs text-gray-800">{preset.name}</span>
+                    <span className="text-[10px] uppercase text-gray-400">{preset.pattern}</span>
+                  </button>
+                );
+              })}
             </div>
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                const chosenId = selectedPresetId ?? selection.metadata.materialPreset ?? 'warm_modern';
+                const preset = MATERIAL_PRESETS.find((p) => p.id === chosenId) ?? MATERIAL_PRESETS[0];
+                
+                updateSelectionMetadata(selection.id, {
+                  materialPreset: preset.id,
+                  color: preset.color,
+                  pattern: preset.pattern,
+                });
+
                 applyLocal([
-                  { type: 'set_material_preset', preset: selection.metadata.materialPreset ?? 'warm_modern' },
-                  { type: 'set_color', value: color },
-                  { type: 'apply_pattern', pattern },
-                ])
-              }
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                  { type: 'set_material_preset', preset: preset.id },
+                  { type: 'set_color', value: preset.color },
+                  { type: 'apply_pattern', pattern: preset.pattern },
+                ]);
+
+                // Also update wallColorOverrides for all meshes in selection
+                for (const meshRef of selection.meshRefs) {
+                  if (meshRef.objectName && meshRef.objectName.startsWith('Wall_')) {
+                    setWallColorOverride(meshRef.objectName, {
+                      color: preset.color,
+                      pattern: preset.pattern,
+                    });
+                  }
+                }
+
+                setAppliedPreset(true);
+                setTimeout(() => setAppliedPreset(false), 2000);
+              }}
+              className={`mt-2 w-full rounded py-2 text-sm font-medium transition-colors ${
+                appliedPreset
+                  ? 'bg-green-600 text-white'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
             >
-              Apply preset
+              {appliedPreset ? '✓ Applied!' : 'Apply preset'}
             </button>
             <p className="mt-1.5 text-[10px] text-gray-500">
               Saved to the current session only.
@@ -215,10 +260,23 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             </div>
             <button
               type="button"
-              onClick={() => applyLocal([{ type: 'apply_pattern', pattern }])}
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+              onClick={() => {
+                applyLocal([{ type: 'apply_pattern', pattern }]);
+                for (const meshRef of selection.meshRefs) {
+                  if (meshRef.objectName && meshRef.objectName.startsWith('Wall_')) {
+                    setWallColorOverride(meshRef.objectName, { pattern });
+                  }
+                }
+                setAppliedPattern(true);
+                setTimeout(() => setAppliedPattern(false), 2000);
+              }}
+              className={`mt-2 w-full rounded py-2 text-sm font-medium transition-colors ${
+                appliedPattern
+                  ? 'bg-green-600 text-white'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
             >
-              Apply pattern
+              {appliedPattern ? '✓ Applied!' : 'Apply pattern'}
             </button>
             <p className="mt-1.5 text-[10px] text-gray-500">
               Saved to the current session only.

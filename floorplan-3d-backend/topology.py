@@ -123,16 +123,22 @@ def _snap_to_axis(wall: Wall, angle_tolerance_deg: float = 12.0) -> Wall:
     if length == 0:
         return wall
 
-    angle = abs(math.degrees(math.atan2(dy, dx))) % 180
-    nearest_axis = 0.0 if angle < 90 else 90.0
-    deviation = min(abs(angle - nearest_axis), abs(angle - (nearest_axis + 180)))
+    angle_deg = (math.degrees(math.atan2(dy, dx)) + 360) % 180
+    # Nearest orthogonal axis is 0° (horizontal) or 90° (vertical)
+    if angle_deg < 45 or angle_deg > 135:
+        target_axis = 0.0
+        deviation = min(angle_deg, 180 - angle_deg)
+    else:
+        target_axis = 90.0
+        deviation = abs(angle_deg - 90.0)
+
     if deviation > angle_tolerance_deg:
         return wall
 
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
     half = length / 2.0
-    if angle < 90:
+    if target_axis == 0.0:
         return Wall(
             id=wall.id,
             start=(cx - half, cy),

@@ -111,18 +111,13 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       setParserConfidence(uploadResult.parser_confidence || 0);
       setValidationReport(uploadResult.validation_report || []);
 
-      setStage('designing');
+      setAnnotationData(graph, objectUrl);
+      setStage('annotating');
     } catch (err: any) {
       console.error(err);
       setStage('error');
       setError(err.message || String(err));
     }
-  };
-
-  const continueToAnnotation = () => {
-    if (!sceneGraph || !imageUrl) return;
-    setAnnotationData(sceneGraph, imageUrl);
-    setStage('annotating');
   };
 
   // After annotation review: export GLB (web-only, no Blender) then open the web editor.

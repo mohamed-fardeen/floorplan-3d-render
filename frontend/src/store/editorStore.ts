@@ -217,6 +217,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       activeSelectionId: null,
       isolatedWallId: null,
       isolatedSelectionId: null,
+      wallColorOverrides: {},
       selectionHistory: [[]],
       selectionHistoryIndex: 0,
       viewport: persisted

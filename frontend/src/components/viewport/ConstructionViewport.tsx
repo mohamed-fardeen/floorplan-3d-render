@@ -968,7 +968,7 @@ const IsolationCamera: React.FC<{ root: THREE.Group | null }> = ({ root }) => {
 
   useFrame((_, delta) => {
     if (!activeRef.current) return;
-    const t = 1 - Math.exp(-delta * 6); // smoothing factor per frame
+    const t = 1 - Math.exp(-delta * 12); // faster smoothing
     camera.position.lerp(toRef.current.pos, t);
     if (controls?.target) {
       controls.target.lerp(toRef.current.target, t);
@@ -976,7 +976,7 @@ const IsolationCamera: React.FC<{ root: THREE.Group | null }> = ({ root }) => {
     } else {
       camera.lookAt(toRef.current.target);
     }
-    if (camera.position.distanceTo(toRef.current.pos) < 0.01) {
+    if (camera.position.distanceTo(toRef.current.pos) < 0.1) {
       activeRef.current = false;
     }
   });
