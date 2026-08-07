@@ -105,6 +105,12 @@ def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
     confidence_threshold = float(ocr_cfg.get("confidence_threshold", 0.6))
     snap_distance = float(ocr_cfg.get("dimension_snap_distance", 1.0))
 
+    # Read the same pixel_to_meter the vectorizer and topology nodes used, so
+    # OCR bounding boxes line up with the wall topology they're being matched
+    # against. Hard-coding 0.0195 here was silently breaking OCR alignment
+    # whenever the operator overrode parser.pixel_to_meter in config.yaml.
+    pixel_to_meter = float(config.get("parser", {}).get("pixel_to_meter", 0.0195))
+
     # Temporarily assemble intermediate scene graph for OCR enrichment helper
     temp_sg = SceneGraph(
         walls=state.topology_data.connected_walls,
@@ -116,7 +122,7 @@ def ocr_extraction_node(state: PipelineState) -> Dict[str, Any]:
 
     ocr_engine = get_ocr_engine(
         provider,
-        pixel_to_meter=0.0195,
+        pixel_to_meter=pixel_to_meter,
         lang=lang,
         confidence_threshold=confidence_threshold,
     )
@@ -151,9 +157,18 @@ def scene_graph_builder_node(state: PipelineState) -> Dict[str, Any]:
     topo = state.topology_data
     overall_conf = state.parser_confidence.overall if state.parser_confidence else 0.85
 
+    # Use the configured pixel_to_meter so the GLB is correctly scaled to
+    # the original floor plan's pixels-per-metre ratio.
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    pixel_to_meter = 0.0195
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            _cfg = yaml.safe_load(f) or {}
+            pixel_to_meter = float(_cfg.get("parser", {}).get("pixel_to_meter", 0.0195))
+
     meta = Metadata(
         units="meters",
-        scale_pixel_to_meter=0.0195,
+        scale_pixel_to_meter=pixel_to_meter,
         confidence_score=overall_conf
     )
 

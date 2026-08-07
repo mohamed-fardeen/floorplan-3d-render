@@ -1,0 +1,21 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - heading "Floor Plan to 3D Pipeline" [level=1] [ref=e5]
+    - paragraph [ref=e6]: Upload a 2D floor plan to test the end-to-end AI workflow generating a full 3D model.
+  - generic [ref=e8]:
+    - generic [ref=e9]: Perception model
+    - combobox "Perception model" [ref=e10]:
+      - option "CubiCasa + Architect YOLO" [selected]
+      - option "Yytsi"
+      - option "CubiCasa"
+      - option "Mask2Former"
+      - option "Architect YOLO"
+      - option "DeepFloorplan"
+      - option "Raster to Vector"
+      - option "Hugging Face"
+  - generic [ref=e11]:
+    - heading "Upload Floor Plan" [level=2] [ref=e12]
+    - generic [ref=e14] [cursor=pointer]:
+      - paragraph [ref=e15]: Drag and drop your floor plan here
+      - paragraph [ref=e16]: Supports PNG, JPG, JPEG
+    - button "Generate 3D Model" [disabled] [ref=e18]

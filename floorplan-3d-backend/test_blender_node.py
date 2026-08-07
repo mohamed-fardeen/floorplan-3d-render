@@ -93,24 +93,36 @@ def assert_contains(code: str, snippet: str, label: str):
 def test_one_room_apartment():
     code = generate(one_room_scene())
     assert_valid_python(code, "One-room apartment")
-    assert_contains(code, "Floor_Bedroom", "Floor object named correctly")
-    assert_contains(code, "Wall_w1",       "Wall object created")
-    assert_contains(code, "Ceiling_Bedroom","Ceiling created")
-    assert_contains(code, "Sun_Light",     "Sun lamp added")
-    assert_contains(code, "Camera_TopDown","Top-down camera added")
+    # One Floor_<room_id> per room; no BasePlate any more.
+    assert_contains(code, "Floor_r1",        "Per-room floor mesh created")
+    assert_contains(code, "Wall_w1",         "Wall object created")
+    assert_contains(code, "Ceiling_Bedroom", "Ceiling created")
+    assert_contains(code, "Sun_Light",       "Sun lamp added")
+    assert_contains(code, "Camera_TopDown",  "Top-down camera added")
     assert_contains(code, "export_scene.gltf", "GLB export added")
+    assert "BasePlate" not in code, "No big base plate — per-room floors only"
 
 def test_two_bedroom_house():
     code = generate(two_bedroom_scene())
     assert_valid_python(code, "Two-bedroom house")
-    assert_contains(code, "Floor_Bedroom", "Bedroom floor")
-    assert_contains(code, "Floor_Kitchen",  "Kitchen floor")
-    assert_contains(code, "Cutter_d1",      "Door Boolean cutter")
+    assert_contains(code, "Floor_r1", "Per-room floor for r1")
+    assert_contains(code, "Floor_r2", "Per-room floor for r2")
+    assert_contains(code, "Cutter_d1", "Door Boolean cutter")
+    assert "BasePlate" not in code, "No big base plate — per-room floors only"
 
 def test_l_shaped_house():
     code = generate(l_shaped_scene())
     assert_valid_python(code, "L-shaped house")
-    assert_contains(code, "Floor_Living_Room", "L-shaped floor polygon")
+    assert_contains(code, "Floor_r1", "Per-room floor for L-shaped room")
+    assert "BasePlate" not in code, "No big base plate — per-room floors only"
+
+
+def test_floor_disabled_no_floor_meshes():
+    cfg = {**BASE_CFG, "include_base": False}
+    code = generate(one_room_scene(), cfg)
+    assert_valid_python(code, "Floor disabled")
+    assert "Floor_r1" not in code, "No floor mesh when include_base=False"
+    assert "BasePlate" not in code, "No big base plate — was already removed"
 
 def test_missing_furniture_no_crash():
     sg = one_room_scene("Unknown")
@@ -213,8 +225,8 @@ def test_woven_rope_wall_pattern():
     code = generate(one_room_scene(), cfg)
     assert_valid_python(code, "Woven rope pattern")
     assert "ShaderNodeNewGeometry" in code
-    assert "_wx_scale.inputs[1].default_value = 4.0" in code
-    assert "_ridge_mix.operation = 'MAXIMUM'" in code
+    assert "_layer_floor.operation = 'FLOOR'" in code
+    assert "_phase_offset.inputs[1].default_value = 1.5708" in code
     assert "Apply Modifiers" not in code
     assert "primitive_cylinder_add" not in code
     assert "bpy.ops.object.join()" not in code
@@ -244,6 +256,109 @@ def test_walls_do_not_merge_across_corners():
     ]
     merged = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
     assert len(merged) == 4, f"Perimeter walls must stay separate, got {len(merged)}"
+
+
+def test_perpendicular_walls_meet_at_corners():
+    """When two perpendicular walls have slightly off endpoints at a
+    corner (typical after vectorisation), the topology must snap them
+    to the same coordinate so the annotation shows no gaps and the
+    3D model gets a corner post at every corner."""
+    from topology import _merge_collinear_walls
+    walls = [
+        Wall(id="horizontal", start=(0.0, 0.0), end=(5.04, 0.02)),
+        Wall(id="vertical",   start=(4.96, 0.02), end=(4.96, 5.0)),
+    ]
+    merged = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
+    # Perpendicular walls must not be merged by the collinear-gaps pass.
+    assert len(merged) == 2
+    # But their touching endpoints must meet at the same coordinate.
+    h_end = next(w.end for w in merged if w.id == "horizontal")
+    v_start = next(w.start for w in merged if w.id == "vertical")
+    assert h_end == v_start, f"corner gap: h.end={h_end}, v.start={v_start}"
+
+
+def test_distant_walls_not_snapped():
+    """Two walls whose endpoints are far apart must stay separate after
+    the perpendicular corner snap — we only fold micro-gaps, never
+    merge distinct corners."""
+    from topology import _merge_collinear_walls
+    walls = [
+        Wall(id="a", start=(0.0, 0.0), end=(5.0, 0.0)),
+        Wall(id="b", start=(10.0, 0.0), end=(10.0, 5.0)),
+    ]
+    merged = _merge_collinear_walls(walls, gap_tolerance=0.30, angle_tolerance_deg=8.0)
+    assert len(merged) == 2
+    a = next(w for w in merged if w.id == "a")
+    b = next(w for w in merged if w.id == "b")
+    assert a.end == (5.0, 0.0)
+    assert b.start == (10.0, 0.0)
+
+
+def test_corner_posts_match_wall_thickness():
+    """The corner post in the generated script must be the same width
+    as the wall — no extra protrusion — so the corner reads as a
+    solid meeting of two walls rather than a visible column."""
+    code = generate(one_room_scene())
+    assert "# Corner post at (0.000, 0.000)" in code
+    assert "post_obj_p1.scale = (0.15, 0.15," in code, \
+        "corner post must match wall thickness (0.15), not 0.35 or larger"
+    assert "BasePlate" not in code
+
+
+def test_walls_extend_to_overlap_at_corners():
+    """Each wall is extended by half its thickness at both ends so the
+    two walls at a corner overlap by the full thickness. This hides the
+    seam between wall and post and makes the outer surface look
+    continuous."""
+    sg = SceneGraph(metadata=Metadata(project_name="Overlap"))
+    sg.walls.append(Wall(id="w0", start=(0.0, 0.0), end=(5.0, 0.0)))
+    sg.rooms.append(Room(id="r1", type="Bedroom", label="Bedroom",
+                         polygon=[(0,0),(5,0),(5,5),(0,5)], area=25.0, centroid=(2.5, 2.5)))
+    code = generate(sg)
+    # Wall length 5.0 + thickness 0.15 = 5.15
+    assert "wall_obj_w0.scale = (5.15, 0.15," in code, \
+        "wall must be extended by its thickness so corners overlap"
+
+
+def test_3d_print_mode_adds_bevel_modifier():
+    """When the wall pattern is stacked_coils or woven_rope (3D-printed
+    patterns), the CORNER POSTS — not the walls — receive a bevel
+    modifier so the outside corners are smooth-curved, exactly like
+    real 3D-printed concrete. The walls stay sharp."""
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {"pattern": "stacked_coils", "color": "#D8C8B8"},
+            "floor": {"design": "solid"},
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert "3D PRINT MODE" in code, "3D print mode banner must be emitted"
+    assert "Bevel_3DPrint" in code, "posts must have a Bevel_3DPrint modifier"
+    assert "post_obj_p1.modifiers.new('Bevel_3DPrint', 'BEVEL')" in code, \
+        "bevel must be on the post (post_obj_p1), not the wall (wall_obj_*)"
+    # Walls must NOT receive a bevel in 3D print mode
+    assert "wall_obj_w0.modifiers.new('Bevel_3DPrint'" not in code, \
+        "walls must NOT be beveled in 3D print mode — only the posts"
+    assert "limit_method = 'ANGLE'" in code, "bevel must be limited to perpendicular edges"
+    assert "angle_limit = 1.309" in code, "bevel angle limit must be ~75 degrees"
+    assert "width = 0.075" in code or "width = 0.0975" in code, \
+        "bevel width must be set"
+
+
+def test_smooth_mode_no_bevel():
+    """When the wall pattern is smooth (not 3D printed), no bevel
+    modifier is added — corners stay sharp."""
+    cfg = {
+        **BASE_CFG,
+        "material_options": {
+            "walls": {"pattern": "smooth", "color": "#F5F5F0"},
+            "floor": {"design": "solid"},
+        },
+    }
+    code = generate(one_room_scene(), cfg)
+    assert "3D PRINT MODE" not in code
+    assert "Bevel_3DPrint" not in code
 
 
 def test_walls_snapped_to_90_degrees():
@@ -313,6 +428,7 @@ if __name__ == "__main__":
     test_one_room_apartment()
     test_two_bedroom_house()
     test_l_shaped_house()
+    test_floor_disabled_no_floor_meshes()
     test_missing_furniture_no_crash()
     test_missing_ocr_labels_no_crash()
     test_irregular_polygon()
@@ -323,6 +439,13 @@ if __name__ == "__main__":
     test_woven_rope_wall_pattern()
     test_multiple_export_formats()
     test_large_building()
+    test_walls_snapped_to_90_degrees()
+    test_perpendicular_walls_meet_at_corners()
+    test_distant_walls_not_snapped()
+    test_corner_posts_match_wall_thickness()
+    test_walls_extend_to_overlap_at_corners()
+    test_3d_print_mode_adds_bevel_modifier()
+    test_smooth_mode_no_bevel()
     print("=" * 60)
     print("  ALL TESTS PASSED")
     print("=" * 60)

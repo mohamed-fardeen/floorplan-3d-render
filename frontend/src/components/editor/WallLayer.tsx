@@ -10,12 +10,17 @@ export const WallLayer: React.FC = () => {
   return (
     <Group>
       {sceneGraph.walls.map((wall) => {
+        if (!wall || !wall.start || !wall.end || !Array.isArray(wall.start) || !Array.isArray(wall.end)) return null;
         const isSelected = selectedObjectId === wall.id;
+        const sx = wall.start[0] ?? 0;
+        const sy = wall.start[1] ?? 0;
+        const ex = wall.end[0] ?? 0;
+        const ey = wall.end[1] ?? 0;
         
         return (
           <Group key={wall.id}>
             <Line
-              points={[wall.start[0], wall.start[1], wall.end[0], wall.end[1]]}
+              points={[sx, sy, ex, ey]}
               stroke={isSelected ? 'blue' : 'black'}
               strokeWidth={wall.thickness || 10}
               lineCap="square"
@@ -26,8 +31,8 @@ export const WallLayer: React.FC = () => {
             {isSelected && (
               <>
                 <Circle
-                  x={wall.start[0]}
-                  y={wall.start[1]}
+                  x={sx}
+                  y={sy}
                   radius={8}
                   fill="blue"
                   draggable
@@ -36,8 +41,8 @@ export const WallLayer: React.FC = () => {
                   }}
                 />
                 <Circle
-                  x={wall.end[0]}
-                  y={wall.end[1]}
+                  x={ex}
+                  y={ey}
                   radius={8}
                   fill="blue"
                   draggable

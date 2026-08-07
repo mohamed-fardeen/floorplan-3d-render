@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { UploadArea } from '../components/UploadArea';
 import { ProgressTracker } from '../components/ProgressTracker';
 import type { PipelineStage } from '../components/ProgressTracker';
@@ -13,6 +13,30 @@ import { AnnotationPage } from './AnnotationPage';
 import { DesignOptions } from '../components/DesignOptions';
 import { useAnnotationStore } from '../store/annotationStore';
 
+const HOME_STATE_KEY = 'floorplan-3d-home-state';
+
+interface PersistedHomeState {
+  stage: PipelineStage;
+  sceneGraph: SceneGraph | null;
+  parserConfidence: number;
+  validationReport: string[];
+  glbUrl?: string;
+  imageUrl: string | null;
+  selectedModel: string;
+  includeBase: boolean;
+  includeRoof: boolean;
+  materialOptions: MaterialOptions;
+}
+
+function readPersistedState(): PersistedHomeState | null {
+  try {
+    const raw = localStorage.getItem(HOME_STATE_KEY);
+    return raw ? JSON.parse(raw) as PersistedHomeState : null;
+  } catch {
+    return null;
+  }
+}
+
 interface HomeProps {
   onOpenEditor: (
     sceneGraph: SceneGraph,
@@ -25,17 +49,30 @@ interface HomeProps {
   ) => void;
 }
 
+function outputUrl(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const filename = path.split('\\').pop()?.split('/').pop();
+  return filename ? `http://localhost:8000/output/${filename}` : undefined;
+}
+
+function defaultOutputUrls(sceneGraph: SceneGraph) {
+  const project = (sceneGraph.metadata.project_name || 'building').replace(/\s+/g, '_');
+  return {
+    glbUrl: `http://localhost:8000/output/${project}.glb`,
+    blendUrl: `http://localhost:8000/output/${project}.blend`,
+  };
+}
+
 export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
   const [stage, setStage] = useState<PipelineStage>('idle');
   const [error, setError] = useState<string | undefined>();
-  const [sceneGraph, setSceneGraph] = useState<any>(null);
+  const [sceneGraph, setSceneGraph] = useState<SceneGraph | null>(null);
   const [parserConfidence, setParserConfidence] = useState<number>(0);
   const [validationReport, setValidationReport] = useState<string[]>([]);
   const [glbUrl, setGlbUrl] = useState<string | undefined>();
-  const [blendUrl, setBlendUrl] = useState<string | undefined>();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState('multi');
-  
+
   const [includeBase, setIncludeBase] = useState(true);
   const [includeRoof, setIncludeRoof] = useState(false);
   const [materialOptions, setMaterialOptions] = useState<MaterialOptions>({
@@ -43,7 +80,6 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       theme: 'warm_modern',
       color: '#D8C8B8',
       pattern: 'none',
-      // Unused by Blender; ridges always match wall colour.
       pattern_color: '#D8C8B8',
     },
     floor: {
@@ -54,20 +90,17 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       tile_size_m: 0.4,
     },
   });
-  const [openingBlender, setOpeningBlender] = useState(false);
   const { setAnnotationData } = useAnnotationStore();
 
   const startPipeline = async (file: File) => {
-    setStage('parsing'); // Since backend upload handles parse, val, ocr, SG synchronously
+    setStage('parsing');
     setError(undefined);
     setSceneGraph(null);
     setGlbUrl(undefined);
-    setBlendUrl(undefined);
     const objectUrl = URL.createObjectURL(file);
     setImageUrl(objectUrl);
 
     try {
-      // 1. Upload & Parse
       const uploadResult = await uploadAndParse(file, selectedModel);
       if (uploadResult.status !== 'success') {
         throw new Error(uploadResult.detail || 'Failed to upload and parse image.');
@@ -79,7 +112,6 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       setValidationReport(uploadResult.validation_report || []);
 
       setStage('designing');
-
     } catch (err: any) {
       console.error(err);
       setStage('error');
@@ -93,52 +125,27 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
     setStage('annotating');
   };
 
+  // After annotation review: export GLB (web-only, no Blender) then open the web editor.
   const handleApprove = async (editedGraph: SceneGraph) => {
-    setStage('blender');
+    setStage('exporting');
     setSceneGraph(editedGraph);
+    setError(undefined);
     try {
+      // open_blender = false → backend only generates the GLB, never spawns Blender
       const exportResult = await exportBlender(editedGraph, includeBase, includeRoof, materialOptions, false);
-      
       if (exportResult.status !== 'success') {
         throw new Error(exportResult.detail || 'Failed to export 3D model.');
       }
-
       const paths: string[] = exportResult.export_paths || [];
-      const glbPath = paths.find(p => p.endsWith('.glb'));
-      const blendPath = paths.find(p => p.endsWith('.blend'));
-
-      if (glbPath) {
-        const filename = glbPath.split('\\').pop()?.split('/').pop();
-        setGlbUrl(`http://localhost:8000/output/${filename}`);
-      }
-      
-      if (blendPath) {
-        const filename = blendPath.split('\\').pop()?.split('/').pop();
-        setBlendUrl(`http://localhost:8000/output/${filename}`);
-      }
-
+      const glbPath = paths.find(p => p.toLowerCase().endsWith('.glb'));
+      const nextGlbUrl = outputUrl(glbPath) || defaultOutputUrls(editedGraph).glbUrl;
+      setGlbUrl(nextGlbUrl);
       setStage('complete');
+      onOpenEditor(editedGraph, { glbUrl: nextGlbUrl, materialOptions, includeBase, includeRoof });
     } catch (err: any) {
       console.error(err);
       setStage('error');
       setError(err.message || String(err));
-    }
-  };
-
-  const handleOpenInBlender = async () => {
-    if (!sceneGraph || openingBlender) return;
-    setOpeningBlender(true);
-    setError(undefined);
-    try {
-      const exportResult = await exportBlender(sceneGraph, includeBase, includeRoof, materialOptions, true);
-      if (exportResult.status !== 'success') {
-        throw new Error(exportResult.detail || 'Failed to open Blender.');
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || String(err));
-    } finally {
-      setOpeningBlender(false);
     }
   };
 
@@ -159,7 +166,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
 
   if (stage === 'annotating') {
     return (
-      <AnnotationPage 
+      <AnnotationPage
         onApprove={handleApprove}
         onBack={() => setStage('idle')}
       />
@@ -198,15 +205,18 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
         </label>
       </div>
 
-      <UploadArea onStartPipeline={startPipeline} disabled={stage !== 'idle' && stage !== 'complete' && stage !== 'error'} />
-      
+      <UploadArea
+        onStartPipeline={startPipeline}
+        disabled={stage !== 'idle' && stage !== 'complete' && stage !== 'error'}
+      />
+
       {stage !== 'idle' && <ProgressTracker currentStage={stage} error={error} />}
 
       {sceneGraph && (
         <>
-          <SceneSummary 
-            sceneGraph={sceneGraph} 
-            parserConfidence={parserConfidence} 
+          <SceneSummary
+            sceneGraph={sceneGraph}
+            parserConfidence={parserConfidence}
             validationReport={validationReport}
           />
           {imageUrl && <AnnotatedFloorplan imageUrl={imageUrl} sceneGraph={sceneGraph} />}
@@ -220,39 +230,9 @@ export const Home: React.FC<HomeProps> = ({ onOpenEditor }) => {
       )}
 
       {sceneGraph && stage === 'complete' && (
-        <div className="w-full max-w-2xl mx-auto mt-4 flex flex-col gap-3">
-          <button
-            onClick={() =>
-              onOpenEditor(sceneGraph, {
-                glbUrl,
-                materialOptions,
-                includeBase,
-                includeRoof,
-              })
-            }
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
-          >
-            Open 3D Construction Editor →
-          </button>
-          
-          <button
-            onClick={handleOpenInBlender}
-            disabled={openingBlender}
-            className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed text-white text-lg font-semibold py-3 px-6 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-            </svg>
-            {openingBlender ? 'Opening Blender…' : 'Open in Blender'}
-          </button>
-        </div>
-      )}
-
-      {sceneGraph && stage === 'complete' && (
-        <DownloadPanel 
-          sceneGraph={sceneGraph} 
-          glbUrl={glbUrl} 
-          blendUrl={blendUrl} 
+        <DownloadPanel
+          sceneGraph={sceneGraph}
+          glbUrl={glbUrl}
         />
       )}
     </div>

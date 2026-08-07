@@ -76,7 +76,10 @@ export interface DesignApplyRequest {
   include_roof?: boolean;
 }
 
-export const applyDesignActions = async (req: DesignApplyRequest): Promise<any> => {
+export const applyDesignActions = async (
+  req: DesignApplyRequest,
+  opts: { signal?: AbortSignal } = {},
+): Promise<any> => {
   try {
     const response = await fetch(`${API_BASE_URL}/design/apply`, {
       method: 'POST',
@@ -89,9 +92,15 @@ export const applyDesignActions = async (req: DesignApplyRequest): Promise<any> 
         include_base: req.include_base ?? true,
         include_roof: req.include_roof ?? false,
       }),
+      signal: opts.signal,
     });
     return await response.json();
   } catch (error) {
+    // AbortError is the caller's signal firing — let it propagate so they
+    // can distinguish a user-initiated cancel from a network/parse failure.
+    if ((error as { name?: string })?.name === 'AbortError') {
+      throw error;
+    }
     console.error('API Error (applyDesignActions):', error);
     return { status: 'error', detail: String(error) };
   }
@@ -201,6 +210,6 @@ export async function getBlenderMcpInfo(): Promise<{
     const response = await fetch(`${API_BASE_URL}/mcp/info`);
     return await response.json();
   } catch {
-    return { blender_executable: null, blender_on_path: false, addon_module: 'floorplan_mcp_addon', socket_port: 9876 };
+    return { blender_executable: null, blender_on_path: false, addon_module: 'floorplan_mcp_addon', socket_port: 6789 };
   }
 }

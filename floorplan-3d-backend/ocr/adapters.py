@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple, Any
 
 from .base import BaseOCREngine
 
@@ -254,15 +254,49 @@ class PaddleOCRAdapter(BaseOCREngine):
                 "Run `pip install paddleocr` to use the 'paddleocr' provider."
             ) from exc
 
-        import torch
-        gpu = self.use_gpu if self.use_gpu is not None else torch.cuda.is_available()
+        # Resolve GPU/CPU preference into paddleocr 3.x's `device=` kwarg.
+        # Old kwargs removed in 3.x: `use_gpu`, `use_angle_cls`, `show_log`.
+        # paddleocr 3.x raises ValueError (NOT TypeError) for these — the
+        # old adapter caught only TypeError, so the constructor always
+        # exploded with "Unknown argument: use_gpu".
+        device = "cpu"
+        if self.use_gpu is None:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "gpu"
+            except ImportError:
+                device = "cpu"
+        elif self.use_gpu:
+            device = "gpu"
 
-        logger.info("PaddleOCR: initialising PP-OCRv6 (lang=%s, gpu=%s)", self.lang, gpu)
-        self._ocr = PaddleOCR(
-            use_angle_cls=True,
-            lang=self.lang,
-            use_gpu=gpu,
-            show_log=False,
+        logger.info("PaddleOCR: initialising PP-OCRv6 (lang=%s, device=%s)", self.lang, device)
+
+        # The constructor accepts a small set of named args + **kwargs; any
+        # unknown kwarg triggers a ValueError from `_common_args`. We try
+        # three progressively-broader signatures and catch BOTH error types.
+        attempts = [
+            # paddleocr 3.x modern signature
+            {"lang": self.lang, "device": device},
+            # paddleocr 3.x minimal — explicit device has to be omitted if
+            # the running build doesn't expose it
+            {"lang": self.lang},
+            # last resort
+            {},
+        ]
+        last_err: Optional[Exception] = None
+        for kw in attempts:
+            try:
+                self._ocr = PaddleOCR(**kw)
+                logger.info("PaddleOCR: initialised with %s", kw)
+                return
+            except (TypeError, ValueError) as e:
+                last_err = e
+                logger.warning("PaddleOCR: kwargs %s rejected (%s); trying next", kw, e)
+                continue
+        raise RuntimeError(
+            f"PaddleOCR could not be initialised with any of the supported "
+            f"signatures. Last error: {last_err}"
         )
 
     # ── Inference ───────────────────────────────────────────────────────
@@ -278,33 +312,74 @@ class PaddleOCRAdapter(BaseOCREngine):
         self._ensure_loaded()
 
         logger.info("PaddleOCR: running on %s", image_path)
-        raw = self._ocr.ocr(image_path, cls=True)
+        # PaddleOCR 3.x: `ocr()` is a deprecated alias for `predict()`. Prefer
+        # `predict()` and pass the new `use_textline_orientation=True` so the
+        # rotate-classifier is still applied. On 2.x we can fall back to the
+        # legacy `ocr(..., cls=True)` signature.
+        if hasattr(self._ocr, "predict"):
+            try:
+                raw = self._ocr.predict(image_path, use_textline_orientation=True)
+            except (TypeError, ValueError):
+                raw = self._ocr.predict(image_path)
+        elif hasattr(self._ocr, "ocr"):
+            raw = self._ocr.ocr(image_path, cls=True)
+        else:
+            raise RuntimeError("PaddleOCR instance exposes neither predict() nor ocr()")
 
         detections: List[OCRDetection] = []
         scale = self.pixel_to_meter
 
-        # paddleocr ≥ 2.x wraps results in an extra list; flatten one level
-        if raw and isinstance(raw[0], list) and raw[0] and isinstance(raw[0][0], list):
-            lines = raw[0]
-        else:
-            lines = raw or []
+        # Normalise paddleocr output across versions.
+        #   2.x: list[ list[ [polygon], (text, conf) ] ]
+        #   3.x: list[ OCRResult ] where OCRResult has .rec_text / .rec_score / .dt_polys
+        # `predict()` may also return a generator / iterator — materialise.
+        raw = list(raw) if raw is not None else []
 
-        for idx, item in enumerate(lines):
-            if not item or len(item) < 2:
-                continue
+        def _extract_from_item(item):
+            """Pull (text, confidence, polygon_px) from one detection entry,
+            handling both 2.x tuple format and 3.x OCRResult objects."""
+            # 3.x OCRResult object
+            if hasattr(item, "rec_text") or hasattr(item, "rec_score"):
+                text = str(getattr(item, "rec_text", "") or "").strip()
+                confidence = float(getattr(item, "rec_score", 0.0) or 0.0)
+                polygon = getattr(item, "dt_polys", None) or getattr(item, "polygon", None) or []
+                return text, confidence, polygon
 
-            polygon_raw, text_info = item[0], item[1]
-            text       = str(text_info[0]).strip() if text_info else ""
-            confidence = float(text_info[1])       if text_info else 0.0
+            # 2.x tuple/list format
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                polygon_raw, text_info = item[0], item[1]
+                if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                    text = str(text_info[0]).strip()
+                    confidence = float(text_info[1])
+                    return text, confidence, polygon_raw
+                if isinstance(text_info, dict):
+                    text = str(text_info.get("text", "")).strip()
+                    confidence = float(text_info.get("confidence", 0.0))
+                    return text, confidence, polygon_raw
+                # text_info is something else; treat the whole item as a tuple
+                return "", 0.0, []
+
+            return "", 0.0, []
+
+        for idx, item in enumerate(raw):
+            text, confidence, polygon_raw = _extract_from_item(item)
 
             if not text or confidence < self.confidence_threshold:
                 continue
 
-            # polygon_raw: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] (pixel coords)
-            poly_px = [(float(p[0]), float(p[1])) for p in polygon_raw]
+            # polygon may be list of (x, y) or list-of-list; coerce to flat list of (x, y)
+            flat: List[Tuple[float, float]] = []
+            for p in polygon_raw or []:
+                # p might be [x, y] or (x, y) or a numpy scalar pair
+                if hasattr(p, "__len__") and len(p) >= 2:
+                    flat.append((float(p[0]), float(p[1])))
+                elif hasattr(p, "x") and hasattr(p, "y"):
+                    flat.append((float(p.x), float(p.y)))
+            if not flat:
+                continue
 
-            # Convert to metres
-            poly_m = [(x * scale, y * scale) for x, y in poly_px]
+            # Polygon is already in pixel coords — convert to metres.
+            poly_m = [(x * scale, y * scale) for x, y in flat]
 
             xs = [p[0] for p in poly_m]
             ys = [p[1] for p in poly_m]

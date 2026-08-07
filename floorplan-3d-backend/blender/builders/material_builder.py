@@ -95,37 +95,96 @@ def _wall_material(color, pattern: str, roughness: float, material_name: str = "
     ]
 
     if pattern in {"stacked_coils", "woven_rope"}:
-        lines += [
-            "# 1) Pattern ridges (world-space horizontal bands, same colour via lighting)",
-            "_geo = nodes.new('ShaderNodeNewGeometry')",
-        ]
-        lines += _wall_ridge_wave("Z", 10.0, "hz")
-        lines += [
-            "_ridge_ramp = nodes.new('ShaderNodeValToRGB')",
-            "_ridge_ramp.color_ramp.elements[0].position = 0.40",
-            "_ridge_ramp.color_ramp.elements.new(0.60)",
-            "_ridge_ramp.color_ramp.elements[1].position = 0.60",
-        ]
-
         if pattern == "woven_rope":
-            lines += _wall_ridge_wave("X", 4.0, "wx")
             lines += [
-                "_ridge_mix = nodes.new('ShaderNodeMath')",
-                "_ridge_mix.operation = 'MAXIMUM'",
-                "links.new(_hz_wave.outputs['Fac'], _ridge_mix.inputs[0])",
-                "links.new(_wx_wave.outputs['Fac'], _ridge_mix.inputs[1])",
-                "links.new(_ridge_mix.outputs['Value'], _ridge_ramp.inputs['Fac'])",
+                "# Realistic Layer-by-Layer Concrete 3D Printing Deposition Simulation",
+                "# Simulates nozzle path depositing rounded continuous strands layer-by-layer from bottom upwards",
+                "_geo = nodes.new('ShaderNodeNewGeometry')",
+                "_pos = nodes.new('ShaderNodeVectorMath')",
+                "_pos.operation = 'SCALE'",
+                "_pos.inputs['Scale'].default_value = 1.0",
+                "links.new(_geo.outputs['Position'], _pos.inputs['Vector'])",
+                "",
+                "# Separate Z (vertical layer height) and X/Y position",
+                "_sep_xyz = nodes.new('ShaderNodeSeparateXYZ')",
+                "links.new(_pos.outputs['Vector'], _sep_xyz.inputs['Vector'])",
+                "",
+                "# 1. Layer-by-layer height quantization & bead cross-section (Z course)",
+                "_layer_scale = nodes.new('ShaderNodeMath')",
+                "_layer_scale.operation = 'MULTIPLY'",
+                "_layer_scale.inputs[1].default_value = 24.0  # Layer frequency",
+                "links.new(_sep_xyz.outputs['Z'], _layer_scale.inputs[0])",
+                "",
+                "_layer_floor = nodes.new('ShaderNodeMath')",
+                "_layer_floor.operation = 'FLOOR'",
+                "links.new(_layer_scale.outputs['Value'], _layer_floor.inputs[0])",
+                "",
+                "# 2. Nozzle deposition phase shift (alternating diagonal interlock per layer)",
+                "_phase_offset = nodes.new('ShaderNodeMath')",
+                "_phase_offset.operation = 'MULTIPLY'",
+                "_phase_offset.inputs[1].default_value = 1.5708  # 90-degree phase shift per layer",
+                "links.new(_layer_floor.outputs['Value'], _phase_offset.inputs[0])",
+                "",
+                "# Horizontal deposition toolpath wave",
+                "_horiz_pos = nodes.new('ShaderNodeMath')",
+                "_horiz_pos.operation = 'MULTIPLY'",
+                "_horiz_pos.inputs[1].default_value = 12.0",
+                "links.new(_sep_xyz.outputs['X'], _horiz_pos.inputs[0])",
+                "",
+                "_toolpath_phase = nodes.new('ShaderNodeMath')",
+                "_toolpath_phase.operation = 'ADD'",
+                "links.new(_horiz_pos.outputs['Value'], _toolpath_phase.inputs[0])",
+                "links.new(_phase_offset.outputs['Value'], _toolpath_phase.inputs[1])",
+                "",
+                "_strand_wave = nodes.new('ShaderNodeMath')",
+                "_strand_wave.operation = 'SINE'",
+                "links.new(_toolpath_phase.outputs['Value'], _strand_wave.inputs[0])",
+                "",
+                "# 3. Rounded bead profile & inter-layer compression",
+                "_z_fraction = nodes.new('ShaderNodeMath')",
+                "_z_fraction.operation = 'SUBTRACT'",
+                "links.new(_layer_scale.outputs['Value'], _z_fraction.inputs[0])",
+                "links.new(_layer_floor.outputs['Value'], _z_fraction.inputs[1])",
+                "",
+                "# Round cross-section shape of extruded cement strand",
+                "_bead_shape = nodes.new('ShaderNodeMath')",
+                "_bead_shape.operation = 'SINE'",
+                "_bead_scale = nodes.new('ShaderNodeMath')",
+                "_bead_scale.operation = 'MULTIPLY'",
+                "_bead_scale.inputs[1].default_value = 3.14159",
+                "links.new(_z_fraction.outputs['Value'], _bead_scale.inputs[0])",
+                "links.new(_bead_scale.outputs['Value'], _bead_shape.inputs[0])",
+                "",
+                "# Combine strand deposition wave and layer bead profile",
+                "_print_height = nodes.new('ShaderNodeMath')",
+                "_print_height.operation = 'MULTIPLY'",
+                "links.new(_strand_wave.outputs['Value'], _print_height.inputs[0])",
+                "links.new(_bead_shape.outputs['Value'], _print_height.inputs[1])",
+                "",
+                "# Convert layer extrusion profile to bump height map",
+                "wall_bump = nodes.new('ShaderNodeBump')",
+                "wall_bump.inputs['Strength'].default_value = 0.90",
+                "wall_bump.inputs['Distance'].default_value = 0.065",
+                "links.new(_print_height.outputs['Value'], wall_bump.inputs['Height'])",
+                "links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])",
             ]
         else:
-            lines += ["links.new(_hz_wave.outputs['Fac'], _ridge_ramp.inputs['Fac'])"]
-
-        lines += [
-            "wall_bump = nodes.new('ShaderNodeBump')",
-            "wall_bump.inputs['Strength'].default_value = 1.0",
-            "wall_bump.inputs['Distance'].default_value = 0.045",
-            "links.new(_ridge_ramp.outputs['Color'], wall_bump.inputs['Height'])",
-            "links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])",
-        ]
+            lines += [
+                "_geo = nodes.new('ShaderNodeNewGeometry')",
+            ]
+            lines += _wall_ridge_wave("Z", 10.0, "hz")
+            lines += [
+                "_ridge_ramp = nodes.new('ShaderNodeValToRGB')",
+                "_ridge_ramp.color_ramp.elements[0].position = 0.40",
+                "_ridge_ramp.color_ramp.elements.new(0.60)",
+                "_ridge_ramp.color_ramp.elements[1].position = 0.60",
+                "links.new(_hz_wave.outputs['Fac'], _ridge_ramp.inputs['Fac'])",
+                "wall_bump = nodes.new('ShaderNodeBump')",
+                "wall_bump.inputs['Strength'].default_value = 1.0",
+                "wall_bump.inputs['Distance'].default_value = 0.045",
+                "links.new(_ridge_ramp.outputs['Color'], wall_bump.inputs['Height'])",
+                "links.new(wall_bump.outputs['Normal'], wall_bsdf.inputs['Normal'])",
+            ]
 
     lines += [
         "# 2) Apply chosen wall colour",
@@ -311,6 +370,10 @@ def build(scene_graph, cfg) -> str:
     lines = ["# ── Materials ────────────────────────────────────────────"]
     lines += _wall_material(wall_color, wall_pattern, wall_roughness)
     lines += _assign_block("Wall_", "WallMaterial")
+    # Corner posts (emitted by wall_builder.py at every junction of ≥2 walls)
+    # share the same wall material so they blend into the wall — they're
+    # visible only because their cross-section is slightly wider.
+    lines += _assign_block("WallPost_", "WallMaterial")
 
     for idx, override in enumerate(region_overrides):
         ow = override.get("walls", {})
@@ -337,7 +400,7 @@ def build(scene_graph, cfg) -> str:
             lines += _assign_objects(object_names, mat_name)
 
     lines += _floor_material(floor_options)
-    lines += _assign_block("Floor_", "FloorMaterial", "BasePlate")
+    lines += _assign_block("Floor_", "FloorMaterial")
     lines += _simple_material("CeilingMaterial", ceiling_preset[:3], ceiling_preset[3])
     lines += _assign_block("Ceiling_", "CeilingMaterial")
     return "\n".join(lines)

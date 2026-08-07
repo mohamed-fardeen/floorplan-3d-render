@@ -164,3 +164,10 @@ export function findPattern(id: string | undefined): PatternDefinition | undefin
 export function findPreset(id: string | undefined): MaterialPreset | undefined {
   return MATERIAL_PRESETS.find((p) => p.id === id);
 }
+
+/** Patterns available in the post-annotation 3D editor (smooth + 3D printed). */
+export const EDITOR_PATTERN_OPTIONS: PatternDefinition[] = PATTERN_LIBRARY.filter(
+  (p) => p.id === 'smooth' || p.id === 'stacked_coils',
+).map((p) =>
+  p.id === 'stacked_coils' ? { ...p, name: '3D Printed' } : p,
+);

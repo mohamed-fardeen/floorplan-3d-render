@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useEditorStore } from '../../store/editorStore';
-import { PATTERN_LIBRARY, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
-import { applyDesignActions, exportBlender, openDesignStream } from '../../api/client';
+import { EDITOR_PATTERN_OPTIONS, MATERIAL_PRESETS, shadeHex } from '../../lib/patterns';
 import { MetricsPanel } from './MetricsPanel';
 import { AIEditPanel } from './AIEditPanel';
 import { CollapsibleSection } from '../ui/CollapsibleSection';
@@ -20,30 +19,11 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
     updateSelectionMetadata,
     materialOptions,
     setMaterialOptions,
-    sceneGraph,
-    includeBase,
-    includeRoof,
-    setSyncStatus,
-    setSyncStage,
-    bumpGlbVersion,
-    setGlbUrl,
     applyDesignPlanLocally,
   } = useEditorStore();
   const renameSelection = useEditorStore((s) => s.renameSelection);
 
-  useEffect(() => {
-    const { close } = openDesignStream((event) => {
-      setSyncStage(event.stage ?? null, event.message ?? null);
-      if (event.stage === 'done' || event.stage === 'error') {
-        setSyncStage(null, null);
-      }
-    });
-    return close;
-  }, [setSyncStage]);
-
   const selection = getActiveSelection();
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('design');
 
   if (!selection) {
@@ -70,74 +50,9 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
   const pattern = selection.metadata.pattern ?? materialOptions.walls.pattern;
   const ridge = shadeHex(color, 0.72);
 
-  const syncEdit = async (operations: Parameters<typeof applyDesignActions>[0]['operations']) => {
-    if (!sceneGraph) return;
-    setApplying(true);
-    setError(null);
-    setSyncStatus('syncing');
-
-    const plan = { selection: selection.id, operations };
-    applyDesignPlanLocally(plan);
-
-    const collectGlb = async (paths: string[] | undefined) => {
-      const glbPath = (paths || []).find((p) => p.endsWith('.glb'));
-      if (!glbPath) return false;
-      const filename = glbPath.split('\\').pop()?.split('/').pop();
-      setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
-      bumpGlbVersion();
-      return true;
-    };
-
-    try {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 120_000);
-      let result: Awaited<ReturnType<typeof applyDesignActions>>;
-      try {
-        result = await applyDesignActions({
-          scene_graph: sceneGraph,
-          selection: {
-            ...selection,
-            metadata: (selection.metadata ?? {}) as never,
-          },
-          operations,
-          material_options: useEditorStore.getState().materialOptions,
-          include_base: includeBase,
-          include_roof: includeRoof,
-        });
-      } finally {
-        window.clearTimeout(timer);
-      }
-
-      if (result.status !== 'success') {
-        throw new Error(result.detail || 'Sync failed');
-      }
-
-      let gotGlb = await collectGlb(result.export_paths);
-
-      // Fallback: if design/apply didn't return a GLB (e.g. the backend
-      // couldn't find Blender), run the full export pipeline so the
-      // browser at least hot-reloads.
-      if (!gotGlb) {
-        const fallback = await exportBlender(
-          sceneGraph,
-          includeBase,
-          includeRoof,
-          useEditorStore.getState().materialOptions,
-          false,
-        );
-        if (fallback.status === 'success') {
-          gotGlb = await collectGlb(fallback.export_paths);
-        }
-      }
-
-      setSyncStatus(gotGlb ? 'synced' : 'error', gotGlb ? undefined : 'No GLB produced');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      setSyncStatus('error', msg);
-    } finally {
-      setApplying(false);
-    }
+  const applyLocal = (operations: Parameters<typeof applyDesignPlanLocally>[0]['operations']) => {
+    if (!selection) return;
+    applyDesignPlanLocally({ selection: selection.id, operations });
   };
 
   const tabs: { id: Tab; label: string }[] = [
@@ -215,12 +130,14 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             </div>
             <button
               type="button"
-              disabled={applying}
-              onClick={() => syncEdit([{ type: 'set_color', value: color }])}
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              onClick={() => applyLocal([{ type: 'set_color', value: color }])}
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
             >
-              {applying ? 'Syncing…' : 'Apply color'}
+              Apply
             </button>
+            <p className="mt-1.5 text-[10px] text-gray-500">
+              Saved to the current session only.
+            </p>
           </section>
         )}
 
@@ -240,15 +157,6 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
                       color: preset.color,
                       pattern: preset.pattern,
                     });
-                    setMaterialOptions({
-                      ...materialOptions,
-                      walls: {
-                        ...materialOptions.walls,
-                        theme: preset.id,
-                        color: preset.color,
-                        pattern: preset.pattern,
-                      },
-                    });
                   }}
                   className="flex w-full items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1.5 text-left hover:border-indigo-300"
                 >
@@ -263,18 +171,20 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             </div>
             <button
               type="button"
-              disabled={applying}
               onClick={() =>
-                syncEdit([
+                applyLocal([
                   { type: 'set_material_preset', preset: selection.metadata.materialPreset ?? 'warm_modern' },
                   { type: 'set_color', value: color },
                   { type: 'apply_pattern', pattern },
                 ])
               }
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
             >
-              {applying ? 'Syncing…' : 'Apply preset & sync'}
+              Apply preset
             </button>
+            <p className="mt-1.5 text-[10px] text-gray-500">
+              Saved to the current session only.
+            </p>
           </section>
         )}
 
@@ -284,7 +194,7 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
               Pattern
             </h3>
             <div className="grid grid-cols-2 gap-2">
-              {PATTERN_LIBRARY.map((p) => (
+              {EDITOR_PATTERN_OPTIONS.map((p) => (
                 <button
                   key={p.id}
                   type="button"
@@ -305,17 +215,18 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             </div>
             <button
               type="button"
-              disabled={applying}
-              onClick={() => syncEdit([{ type: 'apply_pattern', pattern }])}
-              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              onClick={() => applyLocal([{ type: 'apply_pattern', pattern }])}
+              className="mt-2 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700"
             >
-              {applying ? 'Syncing…' : 'Apply pattern'}
+              Apply pattern
             </button>
+            <p className="mt-1.5 text-[10px] text-gray-500">
+              Saved to the current session only.
+            </p>
             <p className="mt-2 text-[10px] leading-snug text-gray-500">
               Pattern preview shows on the 3D viewport as a normal-map overlay.
-              The Blender export uses the real shader (stacked_coils /
-              woven_rope). Browser-only patterns (ribbed, brick, wave, honeycomb)
-              fall back to stacked_coils in Blender.
+              Browser-only patterns (ribbed, brick, wave, honeycomb) use the
+              normal-map shader directly — no backend sync required.
             </p>
           </section>
         )}
@@ -325,8 +236,6 @@ export const EditingPanel: React.FC<EditingPanelProps> = ({ glbRoot = null, view
             <AIEditPanel glbRoot={glbRoot} viewportScreenshot={viewportScreenshot} />
           </section>
         )}
-
-        {error && <p className="text-xs text-red-600">{error}</p>}
       </div>
     </div>
   );

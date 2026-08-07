@@ -1,19 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useEditorStore } from '../../store/editorStore';
-import {
-  validateGraph,
-  exportBlender,
-  getBlenderMcpInfo,
-  getBlenderMcpLog,
-  getBlenderMcpStatus,
-  launchBlenderMcp,
-} from '../../api/client';
-import { SelectionToolbar } from '../editor/SelectionToolbar';
-import { SelectionActions } from '../editor/SelectionActions';
+import { validateGraph } from '../../api/client';
 import { MetricsPanel } from '../editor/MetricsPanel';
 import { AIEditPanel } from '../editor/AIEditPanel';
 import { CollapsibleSection } from './CollapsibleSection';
-import { ArrowLeft, Cpu, Save, RefreshCw, Sparkles } from 'lucide-react';
+import { ArrowLeft, Save, Sparkles, MousePointerClick } from 'lucide-react';
 import * as THREE from 'three';
 
 interface SidebarProps {
@@ -22,94 +13,16 @@ interface SidebarProps {
   onSelectionTransform: (name: 'grow' | 'shrink' | 'invert' | 'connected' | 'expandToMesh') => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelectionTransform }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelectionTransform: _onSelectionTransform }) => {
   const {
     undo,
     redo,
-    undoSelection,
-    redoSelection,
     historyIndex,
     history,
-    selectionHistoryIndex,
-    selectionHistory,
     sceneGraph,
     setSceneGraph,
-    materialOptions,
-    includeBase,
-    includeRoof,
-    setGlbUrl,
-    bumpGlbVersion,
-    setSyncStatus,
     persistProject,
   } = useEditorStore();
-
-  const [syncing, setSyncing] = useState(false);
-  const [mcpAvailable, setMcpAvailable] = useState(false);
-  const [launchingMcp, setLaunchingMcp] = useState(false);
-  const [mcpError, setMcpError] = useState<string | null>(null);
-  const [mcpLog, setMcpLog] = useState<string>('');
-  const [blenderPath, setBlenderPath] = useState<string | null>(null);
-  const [showLog, setShowLog] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const probe = async () => {
-      try {
-        const [status, info, log] = await Promise.all([
-          getBlenderMcpStatus(),
-          getBlenderMcpInfo(),
-          getBlenderMcpLog(),
-        ]);
-        if (cancelled) return;
-        setMcpAvailable(status.available);
-        setBlenderPath(info.blender_executable);
-        setMcpLog(log);
-      } catch {
-        if (!cancelled) setMcpAvailable(false);
-      }
-    };
-    probe();
-    const handle = window.setInterval(probe, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(handle);
-    };
-  }, []);
-
-  const handleLaunchMcp = async () => {
-    setLaunchingMcp(true);
-    setMcpError(null);
-    try {
-      const res = await launchBlenderMcp();
-      if (res.status === 'error') {
-        setMcpError(res.detail || 'Unknown launch error');
-      } else {
-        // Poll for up to 8 s waiting for the socket to come up.
-        const startedAt = Date.now();
-        const wait = async () => {
-          const status = await getBlenderMcpStatus();
-          setMcpAvailable(status.available);
-          if (status.available) {
-            const log = await getBlenderMcpLog();
-            setMcpLog(log);
-            return;
-          }
-          if (Date.now() - startedAt < 8000) {
-            window.setTimeout(wait, 600);
-          } else {
-            const log = await getBlenderMcpLog();
-            setMcpLog(log);
-            setMcpError('Blender started but MCP socket did not respond on :9876.');
-          }
-        };
-        wait();
-      }
-    } catch (err) {
-      setMcpError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLaunchingMcp(false);
-    }
-  };
 
   const handleValidate = async () => {
     if (!sceneGraph) return;
@@ -120,30 +33,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
       }
     } catch (err) {
       console.error('Validation failed', err);
-    }
-  };
-
-  const handleSync = async () => {
-    if (!sceneGraph || syncing) return;
-    setSyncing(true);
-    setSyncStatus('syncing');
-    try {
-      const result = await exportBlender(sceneGraph, includeBase, includeRoof, materialOptions, false);
-      if (result.status !== 'success') {
-        throw new Error(result.detail || 'Export failed');
-      }
-      const glbPath = (result.export_paths || []).find((p: string) => p.endsWith('.glb'));
-      if (glbPath) {
-        const filename = glbPath.split('\\').pop()?.split('/').pop();
-        setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
-        bumpGlbVersion();
-      }
-      setSyncStatus('synced');
-    } catch (err) {
-      console.error('Sync failed', err);
-      setSyncStatus('error', err instanceof Error ? err.message : String(err));
-    } finally {
-      setSyncing(false);
     }
   };
 
@@ -169,20 +58,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
         )}
       </div>
 
-      <CollapsibleSection title="Selection" badge={`${useEditorStore.getState().selections.length} regions`}>
-        <SelectionToolbar />
-        <div className="mt-3">
-          <SelectionActions
-            onGrow={() => onSelectionTransform('grow')}
-            onShrink={() => onSelectionTransform('shrink')}
-            onInvert={() => onSelectionTransform('invert')}
-            onConnected={() => onSelectionTransform('connected')}
-            onExpandToMesh={() => onSelectionTransform('expandToMesh')}
-          />
+      {/* Selection tools now live inside the IsolationPanel (right side).
+          Outside isolation mode the user just orbits the camera and clicks
+          a wall to enter isolation. */}
+      <div className="border-b border-gray-200 px-4 py-3">
+        <div className="flex items-start gap-2 rounded-md bg-indigo-50 px-2 py-1.5 text-[11px] text-indigo-900">
+          <MousePointerClick className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Click any wall in the 3D view to <strong>isolate</strong> it. All
+            pattern / colour / geometry / selection tools then appear inside
+            the isolation panel.
+          </span>
         </div>
-      </CollapsibleSection>
+      </div>
 
-      <CollapsibleSection title="History" badge={`${history.length}/${selectionHistory.length}`}>
+      <CollapsibleSection title="History" badge={`${history.length}`}>
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -199,22 +89,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
             className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             Redo graph
-          </button>
-          <button
-            type="button"
-            onClick={undoSelection}
-            disabled={selectionHistoryIndex <= 0}
-            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          >
-            Undo sel
-          </button>
-          <button
-            type="button"
-            onClick={redoSelection}
-            disabled={selectionHistoryIndex >= selectionHistory.length - 1}
-            className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          >
-            Redo sel
           </button>
         </div>
         <button
@@ -236,91 +110,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ onBackToHome, glbRoot, onSelec
       </CollapsibleSection>
 
       <div className="mt-auto border-t border-gray-200 p-3">
-        <div className="flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={handleValidate}
-            disabled={!sceneGraph}
-            className="flex w-full items-center justify-center gap-1.5 rounded bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-40"
-          >
-            <Sparkles className="h-4 w-4" /> Validate Graph
-          </button>
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={!sceneGraph || syncing}
-            className="flex w-full items-center justify-center gap-1.5 rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
-          >
-            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing…' : 'Sync to Blender'}
-          </button>
-        </div>
-
-        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 font-medium text-gray-700">
-              <Cpu className="h-3 w-3" /> Live MCP
-            </span>
-            <span
-              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${
-                mcpAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'
-              }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  mcpAvailable ? 'bg-emerald-500' : 'bg-gray-400'
-                }`}
-              />
-              {mcpAvailable ? 'connected' : 'offline'}
-            </span>
-          </div>
-          <p className="mt-1 truncate text-[10px] text-gray-500" title={blenderPath ?? ''}>
-            {blenderPath ? `Blender: ${blenderPath}` : 'Blender executable not detected'}
-          </p>
-          {!mcpAvailable && (
-            <>
-              <button
-                type="button"
-                onClick={handleLaunchMcp}
-                disabled={launchingMcp || !blenderPath}
-                className="mt-2 w-full rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-              >
-                {launchingMcp ? 'Launching Blender…' : 'Launch Blender with MCP'}
-              </button>
-              {!blenderPath && (
-                <p className="mt-2 text-[10px] text-red-600">
-                  Blender executable not found on PATH or under C:\Program Files\Blender Foundation.
-                  Install Blender 4.0+ and restart the backend.
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowLog((v) => !v)}
-                className="mt-1 text-[10px] text-gray-500 hover:text-gray-700"
-              >
-                {showLog ? 'Hide' : 'Show'} launch log
-              </button>
-              {showLog && (
-                <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-white p-1.5 font-mono text-[9px] text-gray-700">
-                  {mcpLog || '(no log yet)'}
-                </pre>
-              )}
-              {mcpError && (
-                <p className="mt-1 text-[10px] text-red-600">{mcpError}</p>
-              )}
-              <p className="mt-2 text-[10px] leading-snug text-gray-500">
-                If the button is greyed out, install Blender 4.0+. Otherwise the
-                backend launches Blender with the addon preloaded and the socket
-                listens on <code className="rounded bg-gray-200 px-1">:9876</code>.
-              </p>
-            </>
-          )}
-          {mcpAvailable && (
-            <p className="mt-2 text-[10px] leading-snug text-emerald-700">
-              Blender MCP socket is reachable. Region edits dispatch live.
-            </p>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={handleValidate}
+          disabled={!sceneGraph}
+          className="flex w-full items-center justify-center gap-1.5 rounded bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-40"
+        >
+          <Sparkles className="h-4 w-4" /> Validate Graph
+        </button>
       </div>
     </div>
   );

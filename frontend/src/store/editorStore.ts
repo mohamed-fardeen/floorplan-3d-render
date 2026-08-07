@@ -54,6 +54,26 @@ interface EditorState {
   includeBase: boolean;
   includeRoof: boolean;
 
+  /**
+   * Wall-isolation mode. When `isolatedWallId` is set, the 3D viewport
+   * fades every other wall, flies the camera to the isolated wall, and
+   * shows the IsolationPanel which holds every per-wall control (pattern,
+   * colour, length, thickness, angle, and the box/lasso/brush sub-selection
+   * tools). `isolatedSelectionId` is the Selection that covers the entire
+   * wall — clicking sub-faces inside the panel adds/removes from it.
+   */
+  isolatedWallId: string | null;
+  isolatedSelectionId: string | null;
+
+  /**
+   * Per-wall material overrides keyed by `Wall_<id>`. Populated while the
+   * user is in isolation mode so the change survives exiting isolation and
+   * picking a different wall — otherwise the viewport would revert the
+   * isolated wall back to the project default the moment it's no longer
+   * the active selection.
+   */
+  wallColorOverrides: Record<string, { color?: string; pattern?: string }>;
+
   history: SceneGraph[];
   historyIndex: number;
 
@@ -70,6 +90,15 @@ interface EditorState {
   setSyncStage: (stage: string | null, message: string | null) => void;
   setMaterialOptions: (opts: MaterialOptions) => void;
   setExportOptions: (includeBase: boolean, includeRoof: boolean) => void;
+
+  enterWallIsolation: (wallId: string, selectionId: string) => void;
+  exitWallIsolation: () => void;
+
+  setWallColorOverride: (
+    wallName: string,
+    override: { color?: string; pattern?: string },
+  ) => void;
+  clearWallColorOverride: (wallName: string) => void;
 
   selectObject: (id: string | null, type: 'wall' | 'room' | 'door' | 'window' | 'ocr' | null) => void;
   setSelectionTool: (tool: SelectionTool) => void;
@@ -150,6 +179,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   includeBase: true,
   includeRoof: false,
 
+  isolatedWallId: null,
+  isolatedSelectionId: null,
+
+  wallColorOverrides: {},
+
   history: [],
   historyIndex: -1,
 
@@ -168,18 +202,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setSceneGraph: (graph) => {
     const projectId = deriveProjectId(graph);
     const persisted = loadProjectState(projectId);
-    const baseSelections = persisted
-      ? (persisted.selections as Selection[])
-      : [];
+    // Every session starts fresh: no selections, no isolation, no active
+    // selection. The previously persisted viewport / tool preferences are
+    // restored so the user's UI setup isn't lost, but no walls are
+    // pre-selected — that's what was confusing the user when re-opening
+    // the editor and seeing only the previous wall highlighted.
     set({
       sceneGraph: graph,
       history: [graph],
       historyIndex: 0,
       selectedObjectId: null,
       selectedObjectType: null,
-      selections: baseSelections,
-      activeSelectionId: persisted?.activeSelectionId ?? null,
-      selectionHistory: [baseSelections],
+      selections: [],
+      activeSelectionId: null,
+      isolatedWallId: null,
+      isolatedSelectionId: null,
+      selectionHistory: [[]],
       selectionHistoryIndex: 0,
       viewport: persisted
         ? { ...get().viewport, ...persisted.viewport }
@@ -202,6 +240,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ syncStage: stage, syncMessage: message }),
   setMaterialOptions: (opts) => set({ materialOptions: opts }),
   setExportOptions: (includeBase, includeRoof) => set({ includeBase, includeRoof }),
+
+  enterWallIsolation: (wallId, selectionId) =>
+    set({
+      isolatedWallId: wallId,
+      isolatedSelectionId: selectionId,
+      activeSelectionId: selectionId,
+      selectionTool: 'click',
+    }),
+
+  exitWallIsolation: () =>
+    set({
+      isolatedWallId: null,
+      isolatedSelectionId: null,
+      activeSelectionId: null,
+    }),
+
+  setWallColorOverride: (wallName, override) =>
+    set((state) => {
+      const prev = state.wallColorOverrides[wallName] ?? {};
+      // If the new override would be empty, drop the entry so the wall
+      // falls back to the project default.
+      const next = { ...prev, ...override };
+      const cleaned: { color?: string; pattern?: string } = {};
+      if (next.color) cleaned.color = next.color;
+      if (next.pattern) cleaned.pattern = next.pattern;
+      const updated = { ...state.wallColorOverrides };
+      if (cleaned.color || cleaned.pattern) updated[wallName] = cleaned;
+      else delete updated[wallName];
+      return { wallColorOverrides: updated };
+    }),
+
+  clearWallColorOverride: (wallName) =>
+    set((state) => {
+      if (!(wallName in state.wallColorOverrides)) return state;
+      const updated = { ...state.wallColorOverrides };
+      delete updated[wallName];
+      return { wallColorOverrides: updated };
+    }),
 
   selectObject: (id, type) => set({ selectedObjectId: id, selectedObjectType: type }),
 
@@ -319,21 +395,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   applyDesignPlanLocally: (plan) => {
-    const { activeSelectionId, materialOptions } = get();
+    const { activeSelectionId } = get();
     const targetId = plan.selection === 'current' ? activeSelectionId : plan.selection;
     if (!targetId) return;
 
+    // Only update the active selection's metadata. Do NOT touch the global
+    // materialOptions.walls — that's the "default for walls not in any
+    // selection". Mixing them up causes every wall to inherit the latest
+    // pick's colour/pattern, defeating the whole point of selecting.
     let meta: Partial<Selection['metadata']> = {};
-    let walls = { ...materialOptions.walls };
-
     for (const op of plan.operations) {
       if (op.type === 'set_color') {
         meta.color = op.value;
-        walls.color = op.value;
-        walls.theme = 'custom';
       } else if (op.type === 'apply_pattern') {
         meta.pattern = op.pattern;
-        walls.pattern = op.pattern;
       } else if (op.type === 'set_material_preset') {
         meta.materialPreset = op.preset;
       }
@@ -343,7 +418,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selections: state.selections.map((s) =>
         s.id === targetId ? { ...s, metadata: { ...s.metadata, ...meta } } : s,
       ),
-      materialOptions: { ...materialOptions, walls },
     }));
   },
 

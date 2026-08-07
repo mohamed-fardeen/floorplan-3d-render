@@ -1,6 +1,6 @@
 import os
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -105,6 +105,14 @@ class AgentChatRequest(BaseModel):
     available_materials: Optional[List[str]] = None
     viewport_image: Optional[str] = None  # base64-encoded PNG (data URL or raw b64)
     llm_provider: Optional[str] = None
+    # Authoritative scene graph; the backend uses this to rebuild the
+    # full scene (walls, corner posts, per-room floors, ceilings) before
+    # executing the agent's tool invocations, so the live Blender always
+    # has the latest geometry in sync with the editor.
+    scene_graph: Optional[Dict[str, Any]] = None
+    include_base: bool = True
+    include_roof: bool = False
+    material_options: Optional[Dict[str, Any]] = None
 
 
 class AgentChatResponse(BaseModel):
@@ -288,61 +296,69 @@ async def apply_design_actions(req: DesignApplyRequest):
 
     if is_blender_mcp_available():
         use_live_mcp = True
-        emit("mcp", "Live MCP detected — applying granular ops")
-        # Material must exist on the Blender side BEFORE we assign it to a
-        # face, otherwise the addon's assign_region_material returns
-        # "material not found". Ship the material code first, then bind.
-        from blender.builders import build_materials
+        emit("mcp", "Live MCP detected — regenerating full scene then applying ops")
         from blender.mcp_client import send_command
+        from blender.script_builder import build_script
         import tempfile as _tf
         import os as _os
 
         output_dir = _os.path.abspath("output")
         _os.makedirs(output_dir, exist_ok=True)
+
         try:
-            mat_code = build_materials(
-                req.scene_graph,
-                {
-                    "materials": {},
-                    "material_options": translated["material_options"],
-                    "region_overrides": translated["region_overrides"],
-                    "export": {"output_dir": output_dir, "formats": []},
-                },
+            # Build the full script with the LATEST scene graph. This is
+            # executed before any per-room material ops so the live Blender
+            # always has the current geometry (walls, corner posts, per-room
+            # floors, ceilings, doors, windows) fresh from the script — the
+            # previous version only sent material code, which left the live
+            # scene with whatever stale meshes it had before.
+            tmp = _tf.NamedTemporaryFile(
+                prefix="floorplan3d_live_", suffix=".py", delete=False
             )
-        except Exception as exc:
-            warnings.append(f"[WARN] material code build failed: {exc}")
-        else:
-            # execute_code must NOT reset the scene — build_materials only
-            # emits material definitions + assignments. Run it.
-            ok, payload = send_command({"type": "execute_code", "code": mat_code})
+            tmp.close()
+            live_cfg = {
+                "include_base": req.include_base,
+                "include_roof": req.include_roof,
+                "material_options": translated["material_options"],
+                "region_overrides": translated["region_overrides"],
+                "export": {"output_dir": output_dir, "formats": ["glb"]},
+            }
+            build_script(req.scene_graph, live_cfg, output_dir, tmp.name)
+            with open(tmp.name, "r", encoding="utf-8") as _f:
+                full_code = _f.read()
+            ok, payload = send_command({"type": "execute_code", "code": full_code})
             if not ok:
-                warnings.append(f"[WARN] MCP execute_code failed: {payload}")
-            else:
-                # Now bind each region's material to its face set.
-                for idx, override in enumerate(translated["region_overrides"]):
-                    mat_name = f"RegionMaterial_{idx}"
-                    faces_by_object: Dict[str, List[int]] = {}
-                    for fr in override.get("face_refs", []) or []:
-                        obj_name = fr.get("objectName") if isinstance(fr, dict) else None
-                        fi = fr.get("faceIndex") if isinstance(fr, dict) else None
-                        if not obj_name or fi is None:
-                            continue
-                        faces_by_object.setdefault(obj_name, []).append(int(fi))
-                    ok, payload = assign_region_material(
-                        override.get("object_names", []) or [],
-                        faces_by_object,
-                        mat_name,
-                    )
-                    if not ok:
-                        warnings.append(f"[WARN] MCP assign failed for {mat_name}: {payload}")
-        # Always export after material edits so the browser hot-reloads.
+                warnings.append(f"[WARN] MCP full-scene execute_code failed: {payload}")
+        except Exception as exc:
+            warnings.append(f"[WARN] live MCP scene rebuild failed: {exc}")
+        else:
+            # Bind each region's material to its face set. The full script
+            # already emitted + assigned the RegionMaterial_<idx> slots, so
+            # this is just a re-bind step to be safe.
+            for idx, override in enumerate(translated["region_overrides"]):
+                mat_name = f"RegionMaterial_{idx}"
+                faces_by_object: Dict[str, List[int]] = {}
+                for fr in override.get("face_refs", []) or []:
+                    obj_name = fr.get("objectName") if isinstance(fr, dict) else None
+                    fi = fr.get("faceIndex") if isinstance(fr, dict) else None
+                    if not obj_name or fi is None:
+                        continue
+                    faces_by_object.setdefault(obj_name, []).append(int(fi))
+                ok, payload = assign_region_material(
+                    override.get("object_names", []) or [],
+                    faces_by_object,
+                    mat_name,
+                )
+                if not ok:
+                    warnings.append(f"[WARN] MCP assign failed for {mat_name}: {payload}")
+        # The full script already exported the GLB to <output_dir>/<project>.glb
+        # so the browser hot-reloads from the existing file.
         project = (req.scene_graph.metadata.project_name or "building").replace(" ", "_")
         glb_path = _os.path.join(output_dir, f"{project}.glb")
-        ok, payload = export_glb(glb_path)
-        if ok and isinstance(payload, dict) and payload.get("path"):
-            export_paths = [payload["path"]]
+        if _os.path.isfile(glb_path):
+            export_paths = [glb_path]
         else:
-            warnings.append(f"[WARN] MCP export_glb failed: {payload}")
+            warnings.append(f"[WARN] expected GLB not on disk after MCP run: {glb_path}")
 
     if not use_live_mcp or not export_paths:
         state = PipelineState(
@@ -393,11 +409,30 @@ async def design_stream():
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+class LaunchMcpRequest(BaseModel):
+    blend_path: Optional[str] = None
+
+
 @app.post("/api/mcp/launch")
-async def launch_mcp(blend_path: Optional[str] = None):
+async def launch_mcp(req: Optional[LaunchMcpRequest] = None, blend_path: Optional[str] = Query(None)):
     """Spawn a Blender subprocess with the MCP addon loaded."""
     from blender.mcp_launcher import launch_blender_with_mcp, tail_log
-    proc = launch_blender_with_mcp(blend_path)
+
+    target_path = (req.blend_path if req else None) or blend_path
+    if not target_path or not os.path.isfile(target_path):
+        output_dir = os.path.join(os.path.dirname(__file__), "output")
+        if os.path.isdir(output_dir):
+            candidates = []
+            for root, _, files in os.walk(output_dir):
+                for f in files:
+                    if f.lower().endswith((".blend", ".glb", ".gltf")):
+                        p = os.path.join(root, f)
+                        candidates.append((os.path.getmtime(p), p))
+            if candidates:
+                candidates.sort(reverse=True)
+                target_path = candidates[0][1]
+
+    proc = launch_blender_with_mcp(target_path)
     if proc is None:
         raise HTTPException(
             status_code=503,
@@ -409,15 +444,22 @@ async def launch_mcp(blend_path: Optional[str] = None):
     return {
         "status": "started",
         "pid": proc.pid,
+        "target_path": target_path,
         "log": tail_log(),
     }
 
 
 @app.get("/api/mcp/status")
 async def mcp_status():
+    import asyncio
     from blender.mcp_client import is_blender_mcp_available, ping
-    available = is_blender_mcp_available()
-    info = ping() if available else None
+
+    def _probe():
+        available = is_blender_mcp_available()
+        info = ping()[1] if available else None
+        return available, info
+
+    available, info = await asyncio.to_thread(_probe)
     return {"available": available, "info": info}
 
 
@@ -437,7 +479,7 @@ async def mcp_info():
         "blender_executable": exe,
         "blender_on_path": bool(_shutil.which("blender")),
         "addon_module": "floorplan_mcp_addon",
-        "socket_port": 9876,
+        "socket_port": 6789,
     }
 
 
@@ -475,6 +517,44 @@ async def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
     runner_payload: Optional[Dict[str, Any]] = None
     if result.execution_invocations and not result.error:
         project_name = (req.project_id or "building").replace(" ", "_")
+
+        # Rebuild the full scene in the live Blender BEFORE running the
+        # agent's tool invocations. The runner only dispatches material /
+        # pattern ops to the MCP, so without this step the live Blender
+        # would keep whatever stale geometry it had (potentially missing
+        # corner posts, per-room floors, etc.).
+        if req.scene_graph is not None:
+            try:
+                from blender.mcp_client import is_blender_mcp_available, send_command
+                from blender.script_builder import build_script
+                from schema import SceneGraph
+                import tempfile as _tf
+                import os as _os
+
+                if is_blender_mcp_available():
+                    output_dir = _os.path.abspath("output")
+                    _os.makedirs(output_dir, exist_ok=True)
+                    sg = SceneGraph.model_validate(req.scene_graph)
+                    tmp = _tf.NamedTemporaryFile(
+                        prefix="floorplan3d_agent_", suffix=".py", delete=False
+                    )
+                    tmp.close()
+                    cfg = {
+                        "include_base": req.include_base,
+                        "include_roof": req.include_roof,
+                        "material_options": req.material_options or {},
+                        "region_overrides": [],
+                        "export": {"output_dir": output_dir, "formats": ["glb"]},
+                    }
+                    build_script(sg, cfg, output_dir, tmp.name)
+                    with open(tmp.name, "r", encoding="utf-8") as _f:
+                        full_code = _f.read()
+                    ok, payload = send_command({"type": "execute_code", "code": full_code})
+                    if not ok:
+                        result.notes.append(f"[WARN] agent_chat scene rebuild via MCP failed: {payload}")
+            except Exception as exc:
+                result.notes.append(f"[WARN] agent_chat scene rebuild skipped: {exc}")
+
         runner_result = await run_invocations(
             invocations=result.execution_invocations,
             selection_payload=req.selection,

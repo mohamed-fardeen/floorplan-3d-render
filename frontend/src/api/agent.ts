@@ -16,6 +16,13 @@ export interface AgentChatRequest {
   available_materials?: string[];
   viewport_image?: string; // base64-encoded PNG
   llm_provider?: string;
+  /** Authoritative scene graph — the backend uses this to rebuild the
+   *  full scene (walls, corner posts, per-room floors, ceilings) before
+   *  executing the agent's tool invocations. */
+  scene_graph?: Record<string, unknown> | null;
+  include_base?: boolean;
+  include_roof?: boolean;
+  material_options?: Record<string, unknown> | null;
 }
 
 export interface AgentInvocation {

@@ -11,7 +11,7 @@ import type {
   AgentChatRequest,
 } from '../../api/agent';
 import { fetchLlmProviders } from '../../api/llm';
-import { applyDesignActions, exportBlender } from '../../api/client';
+import * as THREE from 'three';
 
 interface ChatTurn {
   role: 'user' | 'agent';
@@ -28,8 +28,6 @@ const formatTrace = (entry: AgentLogEntry): string => {
     .join(' ');
   return `[${entry.step}] ${meta}`;
 };
-
-import * as THREE from 'three';
 
 interface AIEditPanelProps {
   viewportScreenshot?: () => string | null;
@@ -50,13 +48,10 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
   const {
     getActiveSelection,
     sceneGraph,
+    applyDesignPlanLocally,
     includeBase,
     includeRoof,
-    applyDesignPlanLocally,
-    setSyncStatus,
-    setSyncStage,
-    bumpGlbVersion,
-    setGlbUrl,
+    materialOptions,
   } = useEditorStore();
 
   const selection = getActiveSelection();
@@ -92,8 +87,6 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
     if (!sceneGraph || !selection || !prompt.trim()) return;
     setLoading(true);
     setError(null);
-    setSyncStatus('syncing');
-    setSyncStage('orchestrator', 'Routing prompt');
 
     let viewportImage: string | undefined;
     if (includeImage && viewportScreenshot) {
@@ -119,6 +112,10 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
       available_materials: MATERIAL_PRESETS.map((p) => p.id),
       viewport_image: viewportImage,
       llm_provider: provider || undefined,
+      scene_graph: sceneGraph as unknown as Record<string, unknown> | null,
+      include_base: includeBase,
+      include_roof: includeRoof,
+      material_options: materialOptions as unknown as Record<string, unknown> | null,
     };
 
     try {
@@ -134,17 +131,18 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
           ...h,
           { role: 'agent', text: result.clarification ?? 'Could you clarify?', response: result, ts: Date.now() },
         ]);
-        setSyncStatus('idle');
-        setSyncStage(null, null);
         return;
       }
 
       if (result.error) {
         setError(result.error);
-        setSyncStatus('error', result.error);
         return;
       }
 
+      // Apply the agent's design operations to the local session only —
+      // no backend round-trip, no Blender export. Changes are visible
+      // immediately in the 3D viewport via the same local-apply path
+      // the manual "Apply" buttons use.
       if (result.design_operations.length) {
         applyDesignPlanLocally({
           selection: 'current',
@@ -165,49 +163,9 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
           ts: Date.now(),
         },
       ]);
-
-      if (result.execution_invocations.length) {
-        setSyncStage('execution', `Running ${result.execution_invocations.length} tool(s)`);
-        const apply = await applyDesignActions({
-          scene_graph: sceneGraph,
-          selection: {
-            ...selection,
-            metadata: (selection.metadata ?? {}) as never,
-          },
-          operations: result.design_operations as never,
-          material_options: useEditorStore.getState().materialOptions,
-          include_base: includeBase,
-          include_roof: includeRoof,
-        });
-        const paths: string[] = apply.export_paths || [];
-        let glb = paths.find((p) => p.endsWith('.glb'));
-        if (!glb) {
-          // Fallback: re-run the full export pipeline if design/apply
-          // couldn't produce a GLB.
-          const fb = await exportBlender(
-            sceneGraph,
-            includeBase,
-            includeRoof,
-            useEditorStore.getState().materialOptions,
-            false,
-          );
-          glb = (fb.export_paths || []).find((p: string) => p.endsWith('.glb'));
-        }
-        if (glb) {
-          const filename = glb.split('\\').pop()?.split('/').pop();
-          setGlbUrl(`http://localhost:8000/output/${filename}?t=${Date.now()}`);
-          bumpGlbVersion();
-        }
-        setSyncStatus(apply.status === 'success' && glb ? 'synced' : 'error', apply.detail);
-        setSyncStage(null, null);
-      } else {
-        setSyncStatus('idle');
-        setSyncStage(null, null);
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      setSyncStatus('error', msg);
     } finally {
       setLoading(false);
     }
@@ -301,6 +259,9 @@ export const AIEditPanel: React.FC<AIEditPanelProps> = ({ viewportScreenshot }) 
       >
         {loading ? 'Orchestrating…' : 'Send to agents'}
       </button>
+      <p className="text-[10px] text-gray-500">
+        Agent suggestions are applied to the current session only — no backend sync.
+      </p>
       {!selection && <p className="text-xs text-amber-600">Select a region first.</p>}
       {error && <p className="text-xs text-red-600">{error}</p>}
 

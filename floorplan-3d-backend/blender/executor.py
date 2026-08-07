@@ -13,7 +13,7 @@ import os
 from typing import Tuple, List, Optional
 
 BLENDER_MCP_HOST = "localhost"
-BLENDER_MCP_PORTS = (9876, 9999)
+BLENDER_MCP_PORTS = (6789,)
 SOCKET_TIMEOUT = 5
 EXECUTION_TIMEOUT = 600
 
@@ -22,22 +22,9 @@ _gui_blender_proc: Optional[subprocess.Popen] = None
 
 def _find_blender_executable() -> str | None:
     """Search common install locations and PATH for a Blender binary."""
-    candidates = [
-        "blender",
-        r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
-        "/usr/bin/blender",
-        "/Applications/Blender.app/Contents/MacOS/Blender",
-    ]
-    for c in candidates:
-        if shutil.which(c):
-            return c
-        if os.path.isfile(c):
-            return c
-    return None
+    from blender.paths import find_blender_executable
+
+    return find_blender_executable()
 
 
 def _get_mcp_port() -> int | None:
@@ -71,7 +58,7 @@ def _execute_via_socket(script_path: str) -> Tuple[bool, str]:
             return False, "Blender MCP socket not available."
 
         payload = json.dumps({"type": "execute_code", "code": code}) + "\n"
-        with socket.create_connection((BLENDER_MCP_HOST, port), timeout=60) as sock:
+        with socket.create_connection((BLENDER_MCP_HOST, port), timeout=EXECUTION_TIMEOUT) as sock:
             sock.sendall(payload.encode())
             response = b""
             while True:
@@ -164,6 +151,14 @@ def execute_script(
     warnings: List[str] = []
     expected_exports = expected_exports or []
 
+    port = _get_mcp_port()
+    if port is not None:
+        print(f"    [Executor] MCP socket mode on port {port} (user-managed Blender instance).")
+        success, response = _execute_via_socket(script_path)
+        if not success:
+            warnings.append(f"[ERROR] MCP socket execution failed: {response}")
+        return success, [], warnings
+
     blender_exe = _find_blender_executable()
     if blender_exe:
         print(f"    [Executor] Exporting via headless Blender: {blender_exe}")
@@ -187,14 +182,6 @@ def execute_script(
                 warnings.append("[INFO] Blender window already open.")
 
         return True, export_paths, warnings
-
-    port = _get_mcp_port()
-    if port is not None:
-        print(f"    [Executor] MCP socket mode on port {port} (user-managed Blender instance).")
-        success, response = _execute_via_socket(script_path)
-        if not success:
-            warnings.append(f"[ERROR] MCP socket execution failed: {response}")
-        return success, [], warnings
 
     msg = (
         "[WARN] Blender not found and MCP socket not available. "

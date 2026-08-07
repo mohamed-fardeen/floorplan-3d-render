@@ -64,6 +64,47 @@ def _bbox(scene_graph) -> tuple[float, float, float]:
 FOOTER = """\
 
 
+# ── Apply Boolean modifiers before scale baking ─────────────────────
+# Step 1: Apply scale on all Cutter objects first so their geometry
+#         is correctly sized before the Boolean operation executes.
+for _obj in bpy.data.objects:
+    if _obj.type != 'MESH':
+        continue
+    if not _obj.name.startswith('Cutter_'):
+        continue
+    bpy.context.view_layer.objects.active = _obj
+    _obj.select_set(True)
+    try:
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    except Exception:
+        pass
+    _obj.select_set(False)
+
+# Step 2: Apply all pending Boolean modifiers on wall objects so the
+#         openings are permanently cut into the mesh before export.
+for _obj in bpy.data.objects:
+    if _obj.type != 'MESH':
+        continue
+    if _obj.name.startswith('Cutter_'):
+        continue
+    _bool_mods = [m for m in _obj.modifiers if m.type == 'BOOLEAN']
+    if not _bool_mods:
+        continue
+    bpy.context.view_layer.objects.active = _obj
+    _obj.select_set(True)
+    for _mod in _bool_mods:
+        try:
+            bpy.ops.object.modifier_apply(modifier=_mod.name)
+        except Exception:
+            pass
+    _obj.select_set(False)
+
+# Step 3: Hide cutter objects from viewport and render (they are consumed)
+for _obj in bpy.data.objects:
+    if _obj.name.startswith('Cutter_'):
+        _obj.hide_viewport = True
+        _obj.hide_render = True
+
 # ── Origin Centring ─────────────────────────────────────────────────
 # Bake every geometry object's scale into its mesh, then recompute the bbox
 # in world space and translate the entire scene so the base centre sits at
@@ -71,6 +112,8 @@ FOOTER = """\
 # or scale changes upstream.
 for _obj in bpy.data.objects:
     if _obj.type == 'CAMERA' or _obj.type == 'LIGHT':
+        continue
+    if _obj.name.startswith('Cutter_'):
         continue
     if _obj.data and hasattr(_obj.data, 'vertices'):
         try:
@@ -85,6 +128,8 @@ _min_x, _min_y, _min_z = 1e30, 1e30, 1e30
 _max_x, _max_y, _max_z = -1e30, -1e30, -1e30
 for _obj in bpy.data.objects:
     if _obj.type == 'CAMERA' or _obj.type == 'LIGHT':
+        continue
+    if _obj.name.startswith('Cutter_'):
         continue
     if not _obj.data or not hasattr(_obj.data, 'vertices'):
         continue

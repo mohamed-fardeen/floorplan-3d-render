@@ -1,25 +1,15 @@
 """Launch a Blender subprocess pre-loaded with the Floorplan MCP addon.
 
-Two strategies are supported:
-
-1. **Install into user prefs first, then launch.** The bootstrap calls
-   ``bpy.ops.preferences.addon_install`` followed by
-   ``bpy.ops.preferences.addon_enable``. After that the addon module is
-   registered and the socket server can be started with the
-   ``floorplan.start_mcp`` operator.
-
-2. **One-off bootstrap that imports the addon module directly** when
-   Blender is launched with our bootstrap script. This works even
-   when the addon isn't installed (the user runs Blender once via
-   "Launch" and the addon auto-registers for that session).
+Strategy: one-off bootstrap that imports the addon module directly so
+it works even when the addon isn't installed in Blender's user prefs.
+The bootstrap also kills any other server on port 9876 (e.g. the stock
+BlenderMCP addon) before starting our socket server.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from typing import List, Optional
@@ -30,64 +20,110 @@ LOG_FILENAME = "blender_mcp_launch.log"
 
 
 def _find_blender_executable() -> str | None:
-    candidates = [
-        "blender",
-        r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
-        r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
-        "/usr/bin/blender",
-        "/Applications/Blender.app/Contents/MacOS/Blender",
-    ]
-    for c in candidates:
-        if shutil.which(c):
-            return c
-        if os.path.isfile(c):
-            return c
-    return None
+    from blender.paths import find_blender_executable
+    return find_blender_executable()
 
 
-def _make_bootstrap_script(addon_dir: str, log_path: str) -> str:
-    # The script:
-    #  - adds the addon dir to sys.path so `import floorplan_mcp_addon` works
-    #  - registers + enables the module
-    #  - starts the socket server
-    # NB: we deliberately do NOT use an f-string here so the bootstrap can
-    # contain its own f-strings (escaping would print literal {{...}}).
-    header = (
-        "import os, sys, traceback\n"
-        f"LOG = {log_path!r}\n"
-        "def _log(msg):\n"
-        "    try:\n"
-        "        with open(LOG, 'a', encoding='utf-8') as f:\n"
-        "            f.write(msg + chr(10))\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    print(msg)\n\n"
-        "_log('[bootstrap] starting')\n\n"
-        "try:\n"
-        f"    if {addon_dir!r} not in sys.path:\n"
-        f"        sys.path.insert(0, {addon_dir!r})\n"
-        "    import floorplan_mcp_addon\n"
-        "    try:\n"
-        "        floorplan_mcp_addon.register()\n"
-        "        _log('[bootstrap] addon registered')\n"
-        "    except ValueError as ve:\n"
-        "        _log('[bootstrap] addon already registered: ' + repr(ve))\n"
-        "    except Exception as exc:\n"
-        "        _log('[bootstrap] register failed: ' + repr(exc))\n"
-        "        _log(traceback.format_exc())\n"
-        "        raise\n\n"
-        "try:\n"
-        "    ok = floorplan_mcp_addon.SERVER.start()\n"
-        "    _log('[bootstrap] server.start -> ' + repr(ok))\n"
-        "except Exception as exc:\n"
-        "    _log('[bootstrap] server start failed: ' + repr(exc))\n"
-        "    _log(traceback.format_exc())\n\n"
-        "_log('[bootstrap] done — server thread running')\n"
-    )
-    return header
+def _make_bootstrap_script(addon_dir: str, log_path: str, model_path: Optional[str] = None) -> str:
+    """Build a syntactically-valid Python script that Blender runs on startup."""
+
+    # GLB import block (only when model_path is a .glb/.gltf)
+    if model_path and os.path.isfile(model_path) and model_path.lower().endswith((".glb", ".gltf")):
+        glb_block = f"""\
+try:
+    import bpy
+    for _obj in list(bpy.data.objects):
+        bpy.data.objects.remove(_obj, do_unlink=True)
+    bpy.ops.import_scene.gltf(filepath={model_path!r})
+    _log('[bootstrap] imported GLB: ' + {model_path!r})
+except Exception as _exc:
+    _log('[bootstrap] GLB import failed: ' + repr(_exc))
+
+"""
+    else:
+        glb_block = ""
+
+    script = f"""\
+import os, sys, traceback, socket, time
+
+# ── logging helper ────────────────────────────────────────────────────────
+_LOG = {log_path!r}
+
+def _log(msg):
+    try:
+        with open(_LOG, 'a', encoding='utf-8') as _f:
+            _f.write(str(msg) + '\\n')
+            _f.flush()
+    except Exception:
+        pass
+    print(msg, flush=True)
+
+_log('[bootstrap] starting')
+
+# ── optional GLB import ───────────────────────────────────────────────────
+{glb_block}
+# ── disable stock BlenderMCP addon so it doesn't own port 9876 ──────────
+# The stock BlenderMCP addon (if installed) starts automatically and grabs
+# port 9876 before our script runs. We disable and unregister it here.
+try:
+    import bpy
+    _STOCK_ADDONS = ['blender_mcp', 'BlenderMCP', 'io_scene_mcp']
+    for _mod_name in _STOCK_ADDONS:
+        if _mod_name in bpy.context.preferences.addons:
+            try:
+                bpy.ops.preferences.addon_disable(module=_mod_name)
+                _log('[bootstrap] disabled stock addon: ' + _mod_name)
+            except Exception as _e:
+                _log('[bootstrap] could not disable ' + _mod_name + ': ' + repr(_e))
+        # Also try to stop any running server from the module directly
+        try:
+            _m = sys.modules.get(_mod_name)
+            if _m and hasattr(_m, 'server') and hasattr(_m.server, 'stop'):
+                _m.server.stop()
+                _log('[bootstrap] stopped server from module: ' + _mod_name)
+            elif _m and hasattr(_m, 'SERVER') and hasattr(_m.SERVER, 'stop'):
+                _m.SERVER.stop()
+                _log('[bootstrap] stopped SERVER from module: ' + _mod_name)
+        except Exception as _e:
+            _log('[bootstrap] stop attempt for ' + _mod_name + ': ' + repr(_e))
+    # Give the port time to be released
+    time.sleep(0.5)
+except Exception as _exc:
+    _log('[bootstrap] BlenderMCP disable step failed (non-fatal): ' + repr(_exc))
+
+# ── load our addon from source (works without installation) ──────────────
+_ADDON_DIR = {addon_dir!r}
+try:
+    if _ADDON_DIR not in sys.path:
+        sys.path.insert(0, _ADDON_DIR)
+    import floorplan_mcp_addon as _addon
+    _log('[bootstrap] addon imported from: ' + _ADDON_DIR)
+except Exception as _exc:
+    _log('[bootstrap] FAILED to import addon: ' + repr(_exc))
+    _log(traceback.format_exc())
+    raise SystemExit(1)
+
+# ── register bpy types ────────────────────────────────────────────────────
+try:
+    _addon.register()
+    _log('[bootstrap] addon registered')
+except ValueError as _ve:
+    _log('[bootstrap] addon already registered (ok): ' + repr(_ve))
+except Exception as _exc:
+    _log('[bootstrap] register() failed: ' + repr(_exc))
+    _log(traceback.format_exc())
+
+# ── start the socket server ───────────────────────────────────────────────
+try:
+    _ok = _addon.SERVER.start()
+    _log('[bootstrap] SERVER.start() -> ' + repr(_ok))
+except Exception as _exc:
+    _log('[bootstrap] SERVER.start() failed: ' + repr(_exc))
+    _log(traceback.format_exc())
+
+_log('[bootstrap] done -- floorplan MCP server thread running on port 6789')
+"""
+    return script
 
 
 def _open_log(path: str) -> None:
@@ -104,7 +140,7 @@ def launch_blender_with_mcp(
     blend_path: Optional[str] = None,
     log_dir: Optional[str] = None,
 ) -> Optional[subprocess.Popen]:
-    """Spawn Blender with the MCP server listening on the default port."""
+    """Spawn Blender with the Floorplan MCP server listening on port 9876."""
     exe = _find_blender_executable()
     if not exe:
         return None
@@ -117,30 +153,29 @@ def launch_blender_with_mcp(
     bootstrap = tempfile.NamedTemporaryFile(
         delete=False, suffix=".py", mode="w", encoding="utf-8"
     )
-    bootstrap.write(_make_bootstrap_script(addon_dir, log_path))
+    bootstrap.write(_make_bootstrap_script(addon_dir, log_path, model_path=blend_path))
     bootstrap.close()
 
     cmd: List[str] = [exe]
-    if blend_path and os.path.isfile(blend_path):
+    if blend_path and os.path.isfile(blend_path) and blend_path.lower().endswith(".blend"):
         cmd.append(blend_path)
-    # `factory-startup` runs the script after the UI is fully ready; this
-    # is required for `bpy.ops.preferences.addon_*` and the socket server.
-    cmd.extend(["--python", bootstrap.name, "--factory-startup"])
+    cmd.extend(["--python", bootstrap.name])
 
     try:
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[launcher] exec = {cmd}\n")
-            proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+        log_file = open(log_path, "a", encoding="utf-8")
+        log_file.write(f"[launcher] exec = {cmd}\n")
+        log_file.flush()
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
     except Exception as exc:
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[launcher] Popen failed: {exc!r}\n")
+        with open(log_path, "a", encoding="utf-8") as err_log:
+            err_log.write(f"[launcher] Popen failed: {exc!r}\n")
         return None
 
     return proc
 
 
 def tail_log(path: Optional[str] = None, limit: int = 4000) -> str:
-    """Read the most recent lines from the launch log."""
+    """Read the most recent characters from the launch log."""
     addon_root = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
     log_path = path or os.path.join(addon_root, LOG_FILENAME)
     if not os.path.isfile(log_path):

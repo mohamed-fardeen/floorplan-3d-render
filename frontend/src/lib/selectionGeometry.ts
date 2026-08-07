@@ -33,7 +33,12 @@ export function meshReferenceFromObject(object: THREE.Object3D): MeshReference {
   return { objectName: meshObjectName(object), meshUuid: object.uuid };
 }
 
-/** Cast through a Three.js raycaster returning intersections with all mesh descendants. */
+/** Cast through a Three.js raycaster returning intersections with all mesh descendants.
+ *
+ * Corner posts (`WallPost_<id>`) are intentionally skipped — they sit inside
+ * the wall volume as a structural filler and the user should never pick them
+ * when they click on a wall. Skipping them at the raycaster level means the
+ * click falls through to the wall surface behind the post. */
 export function raycastMeshes(
   root: THREE.Object3D,
   raycaster: THREE.Raycaster,
@@ -43,6 +48,7 @@ export function raycastMeshes(
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh;
       if (!mesh.geometry) return;
+      if (mesh.name.startsWith('WallPost_')) return;
       const result = raycaster.intersectObject(mesh, false);
       for (const r of result) hits.push(r);
     }
@@ -51,14 +57,25 @@ export function raycastMeshes(
   return hits;
 }
 
+/** True when a mesh name refers to a corner post (not a wall). */
+export function isCornerPostMesh(name: string): boolean {
+  return name.startsWith('WallPost_');
+}
+
 /**
  * Convert a Three.js intersection into a FaceReference that survives
  * topology changes: we keep the world-space face centre + normal as a fallback
  * when Blender round-trip rewrites vertex indices.
+ *
+ * Corner posts (`WallPost_<id>`) are rejected here as a safety net even
+ * though the raycaster already filters them — defence in depth so a
+ * selection can never grow a post face reference even if a future change
+ * stops filtering at the raycaster level.
  */
 export function faceRefFromIntersection(intersection: THREE.Intersection): FaceReference | null {
   const mesh = intersection.object as THREE.Mesh | undefined;
   if (!mesh || !mesh.geometry) return null;
+  if (isCornerPostMesh(mesh.name || '')) return null;
 
   const faceIndex =
     typeof intersection.faceIndex === 'number' ? intersection.faceIndex : null;
@@ -245,6 +262,41 @@ export function createSelectionFromFaces(
     metadata,
     createdAt: Date.now(),
   };
+}
+
+/**
+ * Build a FaceReference for every triangle of a single mesh. Used when the
+ * user clicks a wall — the whole wall becomes the active selection.
+ */
+export function allFacesOfMesh(mesh: THREE.Mesh): FaceReference[] {
+  if (!mesh.geometry) return [];
+  const pos = mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  const idx = mesh.geometry.getIndex();
+  if (!pos) return [];
+
+  const faceCount = idx ? idx.count / 3 : pos.count / 3;
+  const meshRef = meshReferenceFromObject(mesh);
+  const refs: FaceReference[] = [];
+  for (let fi = 0; fi < faceCount; fi++) {
+    refs.push({ meshRef, faceIndex: fi });
+  }
+  return refs;
+}
+
+/**
+ * Find a wall mesh by its canonical Blender object name (e.g. `Wall_w3`)
+ * anywhere inside `root`. Returns null when not found.
+ */
+export function findWallMesh(root: THREE.Object3D, wallId: string): THREE.Mesh | null {
+  const target = `Wall_${wallId}`;
+  let found: THREE.Mesh | null = null;
+  root.traverse((child) => {
+    if (found) return;
+    if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).name === target) {
+      found = child as THREE.Mesh;
+    }
+  });
+  return found;
 }
 
 /** Discard highlight geometries to avoid GPU leaks. */

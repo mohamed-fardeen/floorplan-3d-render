@@ -19,10 +19,48 @@
  */
 
 import React, {
-  useState, useRef, useCallback, useEffect,
+  useState, useRef, useCallback, useEffect, Component,
 } from 'react';
 import { useAnnotationStore } from '../store/annotationStore';
 import type { SceneGraph, Wall } from '../types/schema';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Error Boundary — catches render errors and shows a friendly message instead
+// of a blank white screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+class AnnotationErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen bg-gray-950 text-gray-300 gap-4 p-8">
+          <div className="text-4xl">⚠️</div>
+          <h2 className="text-lg font-semibold text-red-400">Something went wrong in the editor</h2>
+          <pre className="text-xs text-gray-500 bg-gray-900 rounded p-4 max-w-2xl overflow-auto whitespace-pre-wrap">
+            {this.state.error.message}
+          </pre>
+          <button
+            onClick={() => this.setState({ error: null })}
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & types
@@ -78,7 +116,13 @@ interface AnnotationPageProps {
 // AnnotationPage
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBack }) => {
+export const AnnotationPage: React.FC<AnnotationPageProps> = (props) => (
+  <AnnotationErrorBoundary>
+    <AnnotationPageInner {...props} />
+  </AnnotationErrorBoundary>
+);
+
+const AnnotationPageInner: React.FC<AnnotationPageProps> = ({ onApprove, onBack }) => {
   const store = useAnnotationStore();
 
   // ── Editor state ────────────────────────────────────────────────────────
@@ -91,6 +135,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
   const [ghostPt, setGhostPt]          = useState<[number,number] | null>(null);
   const [isExporting, setIsExporting]  = useState(false);
   const [exportError, setExportError]  = useState<string | null>(null);
+  const [isolatedWallId, setIsolatedWallId] = useState<string | null>(null);
 
   const { sceneGraph, imageUrl, history, future } = store;
 
@@ -290,6 +335,18 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
   const scale = sceneGraph.metadata.scale_pixel_to_meter;
   const conf  = Math.round((sceneGraph.metadata.confidence_score ?? 0) * 100);
 
+  const isolatedWall = isolatedWallId
+    ? walls.find(w => w.id === isolatedWallId) ?? null
+    : null;
+
+  const handleApplyIsolation = (updated: Partial<Wall>) => {
+    if (!isolatedWallId) return;
+    store.updateWall(isolatedWallId, updated);
+    store._pushHistory();
+    setIsolatedWallId(null);
+    setSelection(null);
+  };
+
   // ── Render ──────────────────────────────────────────────────────────────
 
   const toolBtn = (tool: Tool, label: string, shortcut: string, icon: React.ReactNode) => (
@@ -380,7 +437,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
             transition-all active:scale-95"
         >
           {isExporting ? (
-            <><span className="animate-spin">⟳</span> Opening Blender…</>
+            <><span className="animate-spin">⟳</span> Processing…</>
           ) : (
             <>✓ Approve &amp; Generate 3D</>
           )}
@@ -500,7 +557,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
               {walls.map(wall => {
                 const p1     = toSvg(wall.start[0], wall.start[1]);
                 const p2     = toSvg(wall.end[0],   wall.end[1]);
-                const thickPx = Math.max(wall.thickness / scale, MIN_WALL_PX);
+                const thickPx = Math.max((wall.thickness ?? 0.20) / scale, MIN_WALL_PX);
                 const isSel  = selection?.id === wall.id;
                 const len    = wallLength(wall);
                 const midX   = (p1.x + p2.x) / 2;
@@ -513,7 +570,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
                       x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
                       stroke="transparent"
                       strokeWidth={Math.max(thickPx + 12, 20)}
-                      onClick={e => { e.stopPropagation(); if (activeTool === 'select') setSelection({ type: 'wall', id: wall.id }); }}
+                      onClick={e => { e.stopPropagation(); if (activeTool === 'select') { setSelection({ type: 'wall', id: wall.id }); setIsolatedWallId(wall.id); } }}
                       style={{ cursor: 'pointer' }}
                     />
                     {/* Visible wall */}
@@ -521,7 +578,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
                       x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
                       stroke={isSel ? C.wallSel : C.wall}
                       strokeWidth={thickPx}
-                      strokeLinecap="square"
+                      strokeLinecap="butt"
                       style={{ pointerEvents: 'none' }}
                     />
                     {/* Selection dashes */}
@@ -529,7 +586,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
                       <line
                         x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
                         stroke="white" strokeWidth={1.5}
-                        strokeLinecap="square"
+                        strokeLinecap="butt"
                         strokeDasharray="6 4"
                         opacity={0.6}
                         style={{ pointerEvents: 'none' }}
@@ -550,13 +607,13 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
                     {isSel && (
                       <>
                         <circle
-                          cx={p1.x} cy={p1.y} r={HANDLE_R}
+                          cx={p1.x} cy={p1.y} r={Math.max(thickPx / 2, HANDLE_R)}
                           fill={C.handle} stroke="white" strokeWidth={2}
                           onMouseDown={e => { e.stopPropagation(); setDragState({ handle: 'wall-start', id: wall.id }); }}
                           style={{ cursor: 'grab' }}
                         />
                         <circle
-                          cx={p2.x} cy={p2.y} r={HANDLE_R}
+                          cx={p2.x} cy={p2.y} r={Math.max(thickPx / 2, HANDLE_R)}
                           fill={C.handle} stroke="white" strokeWidth={2}
                           onMouseDown={e => { e.stopPropagation(); setDragState({ handle: 'wall-end', id: wall.id }); }}
                           style={{ cursor: 'grab' }}
@@ -708,7 +765,7 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
               <PropRow label="Thickness">
                 <input
                   type="number" step={0.01} min={0.05} max={2.0}
-                  value={selWall.thickness.toFixed(3)}
+                  value={(selWall.thickness ?? 0.20).toFixed(3)}
                   onChange={e => store.updateWall(selWall.id, { thickness: parseFloat(e.target.value) || 0.20 })}
                   className="w-24 bg-gray-800 text-gray-100 text-sm font-mono rounded px-2 py-1 border border-gray-700 focus:border-indigo-500 focus:outline-none"
                 />
@@ -822,6 +879,16 @@ export const AnnotationPage: React.FC<AnnotationPageProps> = ({ onApprove, onBac
           </div>
         </aside>
       </div>
+
+      {/* ── Wall Isolation Modal ────────────────────────────────────────── */}
+      {isolatedWall && (
+        <WallIsolationModal
+          wall={isolatedWall}
+          scale={scale}
+          onApply={handleApplyIsolation}
+          onCancel={() => setIsolatedWallId(null)}
+        />
+      )}
     </div>
   );
 };
@@ -847,3 +914,332 @@ const DeleteBtn: React.FC<{ onClick: () => void }> = ({ onClick }) => (
     🗑 Delete Element
   </button>
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WallIsolationModal — focused single-wall editor
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WallIsolationModalProps {
+  wall: Wall;
+  scale: number;
+  onApply: (updated: Partial<Wall>) => void;
+  onCancel: () => void;
+}
+
+const WallIsolationModal: React.FC<WallIsolationModalProps> = ({
+  wall, scale, onApply, onCancel,
+}) => {
+  const MW = 600;
+  const MH = 440;
+  const CX = MW / 2;
+  const CY = MH / 2 - 10;
+
+  const [length, setLength]     = useState(() => wallLength(wall));
+  const [thickness, setThickness] = useState(wall.thickness ?? 0.20);
+  const [angleDeg, setAngleDeg] = useState(() => {
+    const dx = wall.end[0] - wall.start[0];
+    const dy = wall.end[1] - wall.start[1];
+    return Math.atan2(dy, dx) * (180 / Math.PI);
+  });
+
+  const modalRef = useRef<SVGSVGElement>(null);
+  const [dragging, setDragging] = useState<'left' | 'right' | 'rot' | null>(null);
+
+  // Scale so the wall fills ~70% of the modal width (min 60 px/m, max 200 px/m)
+  const displayScale = Math.min(Math.max((MW * 0.70) / Math.max(length, 0.3), 60), 200);
+  const halfLenPx    = (length / 2) * displayScale;
+  const thickPx      = Math.max(thickness * displayScale, 10);
+  const ROT_R        = Math.min(halfLenPx + 55, CX - 20);
+
+  const getModalPt = useCallback((e: MouseEvent | React.MouseEvent) => {
+    const svg = modalRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const r = svg.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (MW / r.width),
+      y: (e.clientY - r.top)  * (MH / r.height),
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      const pt = getModalPt(e);
+      if (dragging === 'left') {
+        const arm = Math.max(CX - pt.x, 10);
+        setLength((arm + halfLenPx) / displayScale); // expand/contract from left
+      } else if (dragging === 'right') {
+        const arm = Math.max(pt.x - CX, 10);
+        setLength((halfLenPx + arm) / displayScale);
+      } else if (dragging === 'rot') {
+        // angle is from centre of SVG to pointer, minus 90° (so 0° = horizontal)
+        const a = Math.atan2(pt.y - CY, pt.x - CX) * (180 / Math.PI);
+        setAngleDeg(a);
+      }
+    };
+    const onUp = () => setDragging(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging, getModalPt, CX, CY, halfLenPx, displayScale]);
+
+  const handleApply = () => {
+    const rad    = angleDeg * (Math.PI / 180);
+    const ccx    = (wall.start[0] + wall.end[0]) / 2;
+    const ccy    = (wall.start[1] + wall.end[1]) / 2;
+    const halfL  = length / 2;
+    onApply({
+      start:     [ccx - Math.cos(rad) * halfL, ccy - Math.sin(rad) * halfL],
+      end:       [ccx + Math.cos(rad) * halfL, ccy + Math.sin(rad) * halfL],
+      thickness,
+    });
+  };
+
+  // Rotation arc handle position on the circle
+  const rotRad  = (angleDeg - 90) * (Math.PI / 180); // offset -90 so handle sits above
+  const rotHx   = CX + ROT_R * Math.cos(rotRad);
+  const rotHy   = CY + ROT_R * Math.sin(rotRad);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.82)', backdropFilter: 'blur(6px)' }}
+      onClick={onCancel}
+    >
+      <div
+        className="relative rounded-2xl overflow-hidden shadow-2xl"
+        style={{
+          background: 'linear-gradient(135deg,#111827,#0f172a)',
+          border: '1px solid rgba(99,102,241,0.35)',
+          width: MW + 72,
+          maxWidth: '96vw',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="flex items-center gap-3">
+            <div className="w-2.5 h-2.5 rounded-sm" style={{ background: '#f97316' }} />
+            <span className="text-sm font-semibold text-gray-100">Wall Editor</span>
+            <span className="text-xs text-gray-500 font-mono bg-gray-800 px-2 py-0.5 rounded">{wall.id}</span>
+            <span className="text-xs text-gray-600">— drag handles or type values below</span>
+          </div>
+          <button
+            onClick={onCancel}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-100 hover:bg-gray-700 transition-colors text-lg leading-none"
+          >×</button>
+        </div>
+
+        {/* SVG Viewport */}
+        <div className="flex justify-center px-6 pt-5">
+          <svg
+            ref={modalRef}
+            width={MW} height={MH}
+            viewBox={`0 0 ${MW} ${MH}`}
+            style={{
+              borderRadius: 14,
+              background: 'radial-gradient(ellipse at center, rgba(30,30,50,0.9) 0%, rgba(10,10,20,0.95) 100%)',
+              cursor: dragging === 'rot' ? 'crosshair' : dragging ? 'ew-resize' : 'default',
+              display: 'block',
+            }}
+          >
+            {/* Subtle grid */}
+            <defs>
+              <pattern id="isogrid" width={displayScale} height={displayScale}
+                patternUnits="userSpaceOnUse"
+                x={CX % displayScale} y={CY % displayScale}>
+                <path d={`M ${displayScale} 0 L 0 0 0 ${displayScale}`}
+                  fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth={1} />
+              </pattern>
+              <radialGradient id="wallGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#f97316" stopOpacity={0.25} />
+                <stop offset="100%" stopColor="#f97316" stopOpacity={0} />
+              </radialGradient>
+            </defs>
+            <rect width={MW} height={MH} fill="url(#isogrid)" />
+
+            {/* Glow behind wall */}
+            <ellipse cx={CX} cy={CY} rx={halfLenPx + 30} ry={thickPx + 40}
+              fill="url(#wallGlow)" style={{ pointerEvents: 'none' }} />
+
+            {/* Rotation orbit ring */}
+            <circle cx={CX} cy={CY} r={ROT_R}
+              fill="none"
+              stroke="rgba(99,102,241,0.25)"
+              strokeWidth={1.5}
+              strokeDasharray="5 5"
+              style={{ pointerEvents: 'none' }}
+            />
+            {/* Rotation arc label */}
+            <text x={CX} y={CY - ROT_R - 12}
+              textAnchor="middle" fontSize={11} fill="rgba(99,102,241,0.6)"
+              style={{ pointerEvents: 'none' }}>
+              drag to rotate
+            </text>
+
+            {/* Rotation handle */}
+            <circle
+              cx={rotHx} cy={rotHy} r={12}
+              fill="#4f46e5" stroke="rgba(255,255,255,0.6)" strokeWidth={2}
+              onMouseDown={e => { e.stopPropagation(); setDragging('rot'); }}
+              style={{ cursor: 'grab', filter: 'drop-shadow(0 0 6px rgba(99,102,241,0.8))' }}
+            />
+            <text x={rotHx} y={rotHy} textAnchor="middle" dominantBaseline="middle"
+              fill="white" fontSize={12} style={{ pointerEvents: 'none' }}>↺</text>
+
+            {/* Angle badge */}
+            <text x={CX} y={26}
+              textAnchor="middle" fontSize={13} fontWeight={600}
+              fill="rgba(99,102,241,0.85)"
+              style={{ pointerEvents: 'none' }}>
+              {angleDeg.toFixed(1)}°
+            </text>
+
+            {/* Wall body */}
+            <rect
+              x={CX - halfLenPx} y={CY - thickPx / 2}
+              width={halfLenPx * 2} height={thickPx}
+              fill="#f97316" opacity={0.88}
+              rx={4}
+              style={{ pointerEvents: 'none' }}
+            />
+            {/* Inner texture stripe */}
+            <rect
+              x={CX - halfLenPx + 4} y={CY - thickPx / 2 + 3}
+              width={Math.max(halfLenPx * 2 - 8, 0)} height={Math.max(thickPx - 6, 0)}
+              fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={1} rx={2}
+              style={{ pointerEvents: 'none' }}
+            />
+
+            {/* ── Length dimension line ── */}
+            {(() => {
+              const dy = thickPx / 2 + 20;
+              return (
+                <>
+                  <line x1={CX - halfLenPx} y1={CY + dy} x2={CX + halfLenPx} y2={CY + dy}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <line x1={CX - halfLenPx} y1={CY + dy - 6} x2={CX - halfLenPx} y2={CY + dy + 6}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <line x1={CX + halfLenPx} y1={CY + dy - 6} x2={CX + halfLenPx} y2={CY + dy + 6}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <text x={CX} y={CY + dy + 16}
+                    textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.45)"
+                    style={{ pointerEvents: 'none' }}>
+                    {length.toFixed(2)} m
+                  </text>
+                </>
+              );
+            })()}
+
+            {/* ── Thickness dimension line ── */}
+            {(() => {
+              const dx = halfLenPx + 22;
+              return (
+                <>
+                  <line x1={CX + dx} y1={CY - thickPx / 2} x2={CX + dx} y2={CY + thickPx / 2}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <line x1={CX + dx - 5} y1={CY - thickPx / 2} x2={CX + dx + 5} y2={CY - thickPx / 2}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <line x1={CX + dx - 5} y1={CY + thickPx / 2} x2={CX + dx + 5} y2={CY + thickPx / 2}
+                    stroke="rgba(255,255,255,0.25)" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <text
+                    x={CX + dx + 18} y={CY}
+                    textAnchor="middle" dominantBaseline="middle"
+                    fontSize={10} fill="rgba(255,255,255,0.4)"
+                    transform={`rotate(-90,${CX + dx + 18},${CY})`}
+                    style={{ pointerEvents: 'none' }}>
+                    {thickness.toFixed(2)} m
+                  </text>
+                </>
+              );
+            })()}
+
+            {/* Left endpoint handle */}
+            <circle
+              cx={CX - halfLenPx} cy={CY} r={HANDLE_R + 3}
+              fill="#f97316" stroke="white" strokeWidth={2.5}
+              onMouseDown={e => { e.stopPropagation(); setDragging('left'); }}
+              style={{
+                cursor: 'ew-resize',
+                filter: 'drop-shadow(0 0 6px rgba(249,115,22,0.7))',
+              }}
+            />
+            {/* Right endpoint handle */}
+            <circle
+              cx={CX + halfLenPx} cy={CY} r={HANDLE_R + 3}
+              fill="#f97316" stroke="white" strokeWidth={2.5}
+              onMouseDown={e => { e.stopPropagation(); setDragging('right'); }}
+              style={{
+                cursor: 'ew-resize',
+                filter: 'drop-shadow(0 0 6px rgba(249,115,22,0.7))',
+              }}
+            />
+
+            {/* Handle labels */}
+            <text x={CX - halfLenPx} y={CY - HANDLE_R - 8}
+              textAnchor="middle" fontSize={9} fill="rgba(249,115,22,0.7)"
+              style={{ pointerEvents: 'none' }}>start</text>
+            <text x={CX + halfLenPx} y={CY - HANDLE_R - 8}
+              textAnchor="middle" fontSize={9} fill="rgba(249,115,22,0.7)"
+              style={{ pointerEvents: 'none' }}>end</text>
+          </svg>
+        </div>
+
+        {/* Numeric controls */}
+        <div className="grid grid-cols-3 gap-4 px-6 pt-4 pb-2">
+          {[
+            { label: 'Length (m)', value: length.toFixed(3),   step: 0.05, min: 0.1, max: 100, set: (v: number) => setLength(v || 0.5) },
+            { label: 'Thickness (m)', value: thickness.toFixed(3), step: 0.01, min: 0.05, max: 2.0, set: (v: number) => setThickness(v || 0.15) },
+            { label: 'Angle (°)', value: angleDeg.toFixed(1),  step: 0.5,  min: -180, max: 180, set: (v: number) => setAngleDeg(v) },
+          ].map(({ label, value, step, min, max, set }) => (
+            <div key={label}>
+              <label className="block text-xs text-gray-500 mb-1.5">{label}</label>
+              <input
+                type="number" step={step} min={min} max={max}
+                value={value}
+                onChange={e => set(parseFloat(e.target.value))}
+                className="w-full text-sm font-mono rounded-lg px-3 py-2 focus:outline-none transition-colors"
+                style={{
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#e5e7eb',
+                }}
+                onFocus={e => (e.target.style.borderColor = 'rgba(99,102,241,0.7)')}
+                onBlur={e => (e.target.style.borderColor = 'rgba(255,255,255,0.1)')}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 px-6 py-4" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+            style={{
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: '#9ca3af',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleApply}
+            className="flex-2 py-2.5 px-8 rounded-xl text-sm font-semibold transition-all text-white"
+            style={{
+              background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+              boxShadow: '0 4px 20px rgba(79,70,229,0.4)',
+              flex: 2,
+            }}
+          >
+            ✓ Apply Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

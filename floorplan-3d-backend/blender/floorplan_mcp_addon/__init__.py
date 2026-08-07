@@ -5,7 +5,7 @@ Install once: open Blender → Edit > Preferences → Add-ons → Install from D
 After enabling, press N in the 3D View → MCP tab → "Start server".
 
 The backend (Python `mcp_client.py`) connects to this socket on
-``localhost:9876`` and sends newline-delimited JSON commands.
+``localhost:6789`` and sends newline-delimited JSON commands.
 """
 
 bl_info = {
@@ -29,7 +29,7 @@ from . import geometry_handlers  # noqa: F401  (re-exported via package import)
 
 
 HOST = "localhost"
-PORTS = (9876, 9999)
+PORTS = (6789,)
 MODULE = "floorplan_mcp_addon"
 
 
@@ -320,7 +320,7 @@ SERVER = _Server()
 class FLOORPLAN_OT_mcp_start(bpy.types.Operator):
     bl_idname = "floorplan.start_mcp"
     bl_label = "Start MCP server"
-    bl_description = "Listen on localhost:9876 for Floorplan 3D MCP commands"
+    bl_description = "Listen on localhost:6789 for Floorplan 3D MCP commands"
 
     def execute(self, context):
         ok = SERVER.start()
@@ -354,7 +354,7 @@ class FLOORPLAN_PT_mcp(bpy.types.Panel):
         col.operator(FLOORPLAN_OT_mcp_stop.bl_idname, text="Stop server")
         col.separator()
         col.label(text=f"Module: {MODULE}")
-        col.label(text="Port: 9876 (default)")
+        col.label(text="Port: 6789 (default)")
 
 
 _CLASSES = (

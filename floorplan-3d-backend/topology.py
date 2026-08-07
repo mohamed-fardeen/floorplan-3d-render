@@ -153,7 +153,72 @@ def _merge_collinear_walls(walls: List[Wall], gap_tolerance: float, angle_tolera
         return walls
 
     snapped = [_snap_to_axis(w) for w in walls]
+    # After snapping to axis, perpendicular walls at a corner still have
+    # endpoints a few pixels apart because the snapping is per-wall (each
+    # wall centres on its own midpoint). Cluster every endpoint and snap
+    # each cluster to its centroid so perpendicular walls meet exactly
+    # at the same corner coordinate — no visible gaps in the annotation
+    # and no missing corner posts in the 3D model.
+    snapped = _snap_perpendicular_corners(snapped, gap_tolerance)
     return _fill_collinear_gaps(snapped, gap_tolerance, math.sin(math.radians(angle_tolerance_deg)))
+
+
+def _snap_perpendicular_corners(walls: List[Wall], tolerance: float) -> List[Wall]:
+    """Snap endpoint clusters of perpendicular walls together so they meet at the same point.
+
+    Each endpoint is clustered with its nearest neighbour within
+    ``tolerance``. The cluster centroid is then written back to every
+    wall endpoint that touched it, so a horizontal wall ending at
+    (5.04, 0) and a vertical wall starting at (4.96, 0) both end up at
+    (5.00, 0). Only endpoints are touched — wall lengths/angles stay
+    identical, so the visual length of each wall is preserved.
+    """
+    if not walls:
+        return walls
+
+    # Collect every endpoint with the (wall_index, endpoint_key) pair
+    # so we can write back to the right slot.
+    pts: List[Tuple[float, float, int, str]] = []
+    for i, w in enumerate(walls):
+        pts.append((w.start[0], w.start[1], i, "start"))
+        pts.append((w.end[0], w.end[1], i, "end"))
+
+    # Find the average gap between adjacent walls' endpoints to pick a
+    # sensible tolerance. If the user already supplies a tolerance use
+    # it; otherwise default to the wall thickness so micro-gaps are
+    # folded but genuinely separate corners stay separate.
+    if tolerance <= 0:
+        tolerance = 0.30
+
+    # Greedy single-pass clustering.
+    clusters: List[Dict[str, Any]] = []
+    for x, y, wi, key in pts:
+        match = None
+        for c in clusters:
+            if math.hypot(x - c["x"], y - c["y"]) < tolerance:
+                match = c
+                break
+        if match is None:
+            clusters.append({"x": x, "y": y, "members": [(wi, key)], "n": 1})
+        else:
+            match["members"].append((wi, key))
+            match["n"] += 1
+            match["x"] = (match["x"] * (match["n"] - 1) + x) / match["n"]
+            match["y"] = (match["y"] * (match["n"] - 1) + y) / match["n"]
+
+    # Apply the centroid back to every wall endpoint that touched the
+    # cluster. New Wall objects so the schema stays pure.
+    new_walls: List[Wall] = [w.model_copy() for w in walls]
+    for c in clusters:
+        for wi, key in c["members"]:
+            w = new_walls[wi]
+            new_point = (round(c["x"], 6), round(c["y"], 6))
+            if key == "start":
+                w.start = new_point
+            else:
+                w.end = new_point
+
+    return new_walls
 
 
 def _fill_collinear_gaps(walls: List[Wall], gap_tolerance: float, sin_angle_tol: float) -> List[Wall]:

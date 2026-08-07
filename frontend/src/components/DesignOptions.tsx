@@ -42,9 +42,8 @@ const FLOOR_DESIGNS = [
 ];
 
 const WALL_PATTERNS = [
-  { id: 'none', name: 'Solid', preview: 'solid' },
-  { id: 'stacked_coils', name: 'Stacked Coils', preview: 'stacked' },
-  { id: 'woven_rope', name: 'Woven Rope', preview: 'woven' },
+  { id: 'none', name: 'Smooth', preview: 'solid' },
+  { id: 'stacked_coils', name: '3D printed', preview: 'stacked' },
 ];
 
 /** Darken a #RRGGBB colour for ridge preview shading (same hue as the wall). */

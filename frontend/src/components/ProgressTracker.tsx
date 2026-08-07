@@ -10,7 +10,7 @@ export type PipelineStage =
   | 'scene_graph' 
   | 'designing'
   | 'annotating'
-  | 'blender' 
+  | 'exporting'
   | 'complete' 
   | 'error';
 
@@ -27,7 +27,7 @@ const STAGES = [
   { id: 'scene_graph', label: 'Scene Graph' },
   { id: 'designing', label: 'Design Options' },
   { id: 'annotating', label: 'Manual Review' },
-  { id: 'blender', label: 'Blender Generation' },
+  { id: 'exporting', label: '3D Export' },
   { id: 'complete', label: 'Export Complete' }
 ];
 
@@ -51,9 +51,9 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStage, 
           } else if (currentStage === 'annotating') {
             if (idx < STAGES.findIndex(s => s.id === 'annotating')) status = 'done';
             else if (idx === STAGES.findIndex(s => s.id === 'annotating')) status = 'loading';
-          } else if (currentStage === 'blender') {
-            if (idx < STAGES.findIndex(s => s.id === 'blender')) status = 'done';
-            else if (idx === STAGES.findIndex(s => s.id === 'blender')) status = 'loading';
+          } else if (currentStage === 'exporting') {
+            if (idx < STAGES.findIndex(s => s.id === 'exporting')) status = 'done';
+            else if (idx === STAGES.findIndex(s => s.id === 'exporting')) status = 'loading';
           } else if (currentStage === 'complete') {
             status = 'done';
           }
